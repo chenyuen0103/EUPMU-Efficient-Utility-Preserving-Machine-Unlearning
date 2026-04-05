@@ -41,7 +41,7 @@ def main():
 
     if torch.cuda.is_available():
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-        device = torch.device(f"cuda:{args.gpu}")
+        device = torch.device("cuda:0")
     else:
         device = torch.device("cpu")
 
@@ -98,7 +98,7 @@ def main():
     if args.resume:
         print("resume from checkpoint {}".format(args.checkpoint))
         checkpoint = torch.load(
-            args.checkpoint, map_location=torch.device("cuda:" + str(args.gpu))
+            args.checkpoint, map_location=device
         )
         best_sa = checkpoint["best_sa"]
         print(best_sa)
@@ -194,7 +194,7 @@ def main():
     print("########################################################################")
     print("load best model...........")
     model_path = os.path.join(args.save_dir, "model_SA_best.pth.tar")
-    checkpoint = torch.load(model_path, map_location=torch.device("cuda:" + str(args.gpu)))
+    checkpoint = torch.load(model_path, map_location=device)
 
     model.load_state_dict(checkpoint["state_dict"], strict=True)
 

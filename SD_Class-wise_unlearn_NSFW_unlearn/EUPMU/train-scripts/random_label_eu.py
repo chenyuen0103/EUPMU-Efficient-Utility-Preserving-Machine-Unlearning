@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from dataset import setup_forget_data, setup_model, setup_remain_data
 from tqdm import tqdm
-from weighted_methods.utils import extract_weight_method_parameters_from_args
+from weighted_methods.utils import extract_weight_method_parameters_from_args, set_seed
 from weighted_methods.weight_methods import WeightMethods
 
 import random
@@ -178,6 +178,7 @@ def certain_label(
         else:
             name += f"-mtl_{args.mtl_method}"
         weight_method = WeightMethods(args.mtl_method, n_tasks=2, device=device, **method_kwargs)
+    name += f"-seed_{args.seed}"
     # TRAINING CODE
     for epoch in range(epochs):
         remain_iter = iter(remain_dl)
@@ -468,6 +469,13 @@ if __name__ == "__main__":
         default="0",
     )
     parser.add_argument(
+        "--seed",
+        help="random seed used to make training reproducible",
+        type=int,
+        required=False,
+        default=42,
+    )
+    parser.add_argument(
         "--image_size",
         help="image size used to train",
         type=int,
@@ -520,6 +528,7 @@ if __name__ == "__main__":
         else args.eu_w_lr
     )
     error_eu = wandb_error_eu if wandb_error_eu is not None else args.eu_error
+    set_seed(args.seed)
     print(f"EU Weight learning rate: {weight_learning_rate_eu}, EU Error: {error_eu}")
 
     # classes = [int(d) for d in args.classes.split(',')]

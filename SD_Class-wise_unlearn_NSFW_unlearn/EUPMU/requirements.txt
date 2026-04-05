@@ -1,11 +1,13 @@
 numpy==1.19.2
-# Install torch/torchvision separately to match the local GPU and CUDA stack.
-# For H200-class GPUs, use a CUDA 12.x build from pytorch.org before `pip install -r requirements.txt`.
+# Install torch and torchvision separately so they match the local GPU and CUDA stack.
+# For the original Stable Diffusion setup, the conda path in environment.yaml uses
+# torch==1.11.0, torchvision==0.12.0, and CUDA 11.3.
 albumentations==0.4.3
 diffusers==0.36.0
 opencv-python==4.1.2.30
 pudb==2019.2
 invisible-watermark
+matplotlib
 imageio==2.9.0
 imageio-ffmpeg==0.4.2
 pytorch-lightning==1.4.2
@@ -20,6 +22,7 @@ kornia==0.6
 datasets==2.13.1
 pyarrow>=8.0.0
 fsspec==2023.6.0
-# -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
-# -e git+https://github.com/openai/CLIP.git@main#egg=clip
+# Install these separately after `pip install -r requirements.txt`:
+#   pip install taming-transformers-rom1504
+#   pip install git+https://github.com/openai/CLIP.git
 -e .

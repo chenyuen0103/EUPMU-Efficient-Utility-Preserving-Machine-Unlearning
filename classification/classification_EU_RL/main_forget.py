@@ -18,7 +18,7 @@ from trainer import validate
 def main(args):
     if torch.cuda.is_available():
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-        device = torch.device(f"cuda:{args.gpu}")
+        device = torch.device("cuda:0")
     else:
         device = torch.device("cpu")
 
@@ -142,7 +142,7 @@ def main(args):
         model, evaluation_result = checkpoint
     else:
         if args.unlearn != "retrain":
-            checkpoint = torch.load(args.mask)
+            checkpoint = torch.load(args.mask, map_location=device)
             if "state_dict" in checkpoint.keys():
                 checkpoint = checkpoint["state_dict"]
             model.load_state_dict(checkpoint, strict=False)

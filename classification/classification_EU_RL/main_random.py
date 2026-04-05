@@ -40,7 +40,7 @@ def main(args):
 
     if torch.cuda.is_available():
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-        device = torch.device(f"cuda:{args.gpu}")
+        device = torch.device("cuda:0")
     else:
         device = torch.device("cpu")
 
@@ -345,4 +345,3 @@ if __name__ == "__main__":
 
     if wandb.run is not None:
         wandb.finish()
-

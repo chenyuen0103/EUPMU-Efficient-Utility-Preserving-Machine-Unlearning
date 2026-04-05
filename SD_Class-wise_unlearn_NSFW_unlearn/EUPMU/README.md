@@ -10,22 +10,27 @@ Note that this code base aims to forget one class and preserve the other 9 in th
     wget https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4-full-ema.ckpt
     ```
 * Install the required environment
-    The environment can be created using conda with the provided `environment.yaml` file from the original https://github.com/CompVis/stable-diffusion repository.
+    Two supported setup paths are provided below.
+
+    Conda environment from `environment.yaml`:
     ```
-    conda env create -f environment.yaml
+    mamba env create -f environment.yaml
     conda activate ldm
-    conda install matplotlib -y
     ```
-    As in https://github.com/CompVis/stable-diffusion/issues/300 points out using conda might cause some issues with some packages. If you encounter any issues, you can try installing the required packages using pip with the provided `requirements.txt` file.
+
+    If conda solving takes too long on your machine or the pip phase inside `conda env create` fails, use the pip fallback path instead:
     ```
-    conda env create -f environment.yaml 
-    <!-- (ignore errors) -->
+    conda create -n ldm python=3.8 pip -y
     conda activate ldm
-    <!-- Create a new requirements.txt and copy the packages needed to pip install in the environment.yaml to requirements.txt, and comment out the lines of "taming-transformers" and "clip". -->
+
+    # Install torch and torchvision separately to match your CUDA version.
+    # For CUDA 11.3, the conda environment above uses torch==1.11.0 and torchvision==0.12.0.
     pip install -r requirements.txt
+
+    # Install the remaining repos separately.
     pip install taming-transformers-rom1504
-    pip install clip
-   ```
+    pip install git+https://github.com/openai/CLIP.git
+    ```
 
 
 # Forgetting Training with EUPMU

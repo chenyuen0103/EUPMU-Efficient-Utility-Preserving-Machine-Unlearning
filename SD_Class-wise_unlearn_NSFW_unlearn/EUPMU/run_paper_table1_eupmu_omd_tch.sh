@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Paper-style Table 1 reproduction for Stable Diffusion class-wise forgetting
-# using EUPMU and OMD-TCH.
-#
-# Paper SD settings from Appendix D:
-# - optimizer: Adam
-# - epochs: 5
-# - lr: 1e-5
-# - alpha: 0.01
-# - batch_size: 8
-# - DDIM steps: 100
-# - guidance scale: 7.5
-#
-# OMD-TCH is not a paper baseline in 2510.22124v2, so its method-specific parameters
-# use the repo defaults unless overridden via environment variables.
+# Paper-style Table 1 reproduction wrapper for Stable Diffusion class-wise forgetting.
+# By default it runs the repo's EUPMU and OMD-TCH methods with the SD settings from
+# Appendix D and averages the metrics over 5 deterministic trials.
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
@@ -22,46 +11,67 @@ cd "$ROOT_DIR"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 METHODS="${METHODS:-eu omd_tch}"
 CLASS_LIST="${CLASS_LIST:-0 1 2 3 4 5 6 7 8 9}"
+TRIAL_COUNT="${TRIAL_COUNT:-5}"
+BASE_SEED="${BASE_SEED:-1234}"
 EVAL_SAVE_ROOT="${EVAL_SAVE_ROOT:-evaluation_folder/paper_table1_eupmu_omd_tch}"
 PROMPTS_PATH="${PROMPTS_PATH:-prompts/imagenette.csv}"
 
 RUN_SAVE_REAL_IMAGES="${RUN_SAVE_REAL_IMAGES:-1}"
 RUN_TRAIN="${RUN_TRAIN:-1}"
+RUN_CONVERT="${RUN_CONVERT:-1}"
 RUN_GENERATE="${RUN_GENERATE:-1}"
 RUN_FID="${RUN_FID:-1}"
 RUN_CLASSIFY="${RUN_CLASSIFY:-1}"
+RUN_COLLECT="${RUN_COLLECT:-1}"
 
+TRAIN_METHOD="${TRAIN_METHOD:-full}"
 TRAIN_ALPHA="${TRAIN_ALPHA:-0.01}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-8}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-5}"
 TRAIN_LR="${TRAIN_LR:-1e-5}"
+TRAIN_IMAGE_SIZE="${TRAIN_IMAGE_SIZE:-128}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-7.5}"
 DDIM_STEPS="${DDIM_STEPS:-100}"
-IMAGE_SIZE="${IMAGE_SIZE:-512}"
+NUM_SAMPLES="${NUM_SAMPLES:-10}"
+EVAL_IMAGE_SIZE="${EVAL_IMAGE_SIZE:-512}"
+DEVICE_ID="${DEVICE_ID:-0}"
+EVAL_DEVICE="${EVAL_DEVICE:-cuda:0}"
+SKIP_EXISTING="${SKIP_EXISTING:-1}"
 
+FID_SCRIPT="${FID_SCRIPT:-eval-scripts/compute-fid-per-class.py}"
+EU_W_LR="${EU_W_LR:-}"
+EU_ERROR="${EU_ERROR:-}"
+WEIGHT_INIT="${WEIGHT_INIT:-}"
+
+PYTHON_BIN="$PYTHON_BIN" \
 METHODS="$METHODS" \
 CLASS_LIST="$CLASS_LIST" \
+TRIAL_COUNT="$TRIAL_COUNT" \
+BASE_SEED="$BASE_SEED" \
 EVAL_SAVE_ROOT="$EVAL_SAVE_ROOT" \
 PROMPTS_PATH="$PROMPTS_PATH" \
 RUN_SAVE_REAL_IMAGES="$RUN_SAVE_REAL_IMAGES" \
 RUN_TRAIN="$RUN_TRAIN" \
+RUN_CONVERT="$RUN_CONVERT" \
 RUN_GENERATE="$RUN_GENERATE" \
 RUN_FID="$RUN_FID" \
 RUN_CLASSIFY="$RUN_CLASSIFY" \
+RUN_COLLECT="$RUN_COLLECT" \
+TRAIN_METHOD="$TRAIN_METHOD" \
 TRAIN_ALPHA="$TRAIN_ALPHA" \
 TRAIN_BATCH_SIZE="$TRAIN_BATCH_SIZE" \
 TRAIN_EPOCHS="$TRAIN_EPOCHS" \
 TRAIN_LR="$TRAIN_LR" \
+TRAIN_IMAGE_SIZE="$TRAIN_IMAGE_SIZE" \
 GUIDANCE_SCALE="$GUIDANCE_SCALE" \
 DDIM_STEPS="$DDIM_STEPS" \
-IMAGE_SIZE="$IMAGE_SIZE" \
-FID_SCRIPT="eval-scripts/compute-fid-per-class.py" \
+NUM_SAMPLES="$NUM_SAMPLES" \
+EVAL_IMAGE_SIZE="$EVAL_IMAGE_SIZE" \
+DEVICE_ID="$DEVICE_ID" \
+EVAL_DEVICE="$EVAL_DEVICE" \
+SKIP_EXISTING="$SKIP_EXISTING" \
+FID_SCRIPT="$FID_SCRIPT" \
+EU_W_LR="$EU_W_LR" \
+EU_ERROR="$EU_ERROR" \
+WEIGHT_INIT="$WEIGHT_INIT" \
 bash run_table1_sd.sh
-
-"$PYTHON_BIN" eval-scripts/collect-table1-results.py \
-  --evaluation_root "$EVAL_SAVE_ROOT" \
-  --prompts_path "$PROMPTS_PATH" \
-  --methods "$METHODS" \
-  --class_ids "$CLASS_LIST" \
-  --output_csv "$EVAL_SAVE_ROOT/table1_eupmu_omd_tch.csv" \
-  --output_md "$EVAL_SAVE_ROOT/table1_eupmu_omd_tch.md"

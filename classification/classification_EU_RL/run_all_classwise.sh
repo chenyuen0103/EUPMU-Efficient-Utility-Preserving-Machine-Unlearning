@@ -5,7 +5,10 @@ ARCH="${ARCH:-resnet18}"
 DATASET="${DATASET:-cifar10}"
 CLASS_TO_REPLACE="${CLASS_TO_REPLACE:-0}"
 GPU="${GPU:-0}"
+LOCAL_GPU="${LOCAL_GPU:-0}"
 SAVE_DIR="${SAVE_DIR:-output}"
+SEED="${SEED:-2}"
+TRAIN_SEED="${TRAIN_SEED:-$SEED}"
 MASK="${MASK:-pretrained_models/resnet18/cifar10/model_SA_best.pth.tar}"
 SALUN_MASK_PATH="${SALUN_MASK_PATH:-saliency_maps/resnet18/cifar10/forget_10.0%/with_0.5.pt}"
 RUN_SALUN_MASK_GEN="${RUN_SALUN_MASK_GEN:-0}"
@@ -15,6 +18,8 @@ WANDB_ENTITY_TAG="${WANDB_ENTITY_TAG:-None}"
 FORGET_TAG="${FORGET_TAG:-forget_10.0%}"
 RUN_OMD_ABLATION_GRID="${RUN_OMD_ABLATION_GRID:-0}"
 OMD_ABLATION_ETAS="${OMD_ABLATION_ETAS:-0.01 0.03 0.1}"
+
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU}"
 
 run() {
   echo
@@ -75,7 +80,10 @@ BASE_FORGET_ARGS=(
   --class_to_replace "$CLASS_TO_REPLACE"
   --mask "$MASK"
   --save_dir "$SAVE_DIR"
-  --gpu "$GPU"
+  --gpu "$LOCAL_GPU"
+  --seed "$SEED"
+  --train_seed "$TRAIN_SEED"
+  --wandb_entity "$WANDB_ENTITY_TAG"
 )
 
 BASE_RANDOM_ARGS=(
@@ -84,7 +92,10 @@ BASE_RANDOM_ARGS=(
   --class_to_replace "$CLASS_TO_REPLACE"
   --mask "$MASK"
   --save_dir "$SAVE_DIR"
-  --gpu "$GPU"
+  --gpu "$LOCAL_GPU"
+  --seed "$SEED"
+  --train_seed "$TRAIN_SEED"
+  --wandb_entity "$WANDB_ENTITY_TAG"
 )
 
 run_if_needed "$(method_result_path retrain)" \
