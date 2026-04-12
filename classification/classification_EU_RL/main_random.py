@@ -278,6 +278,28 @@ def main(args):
         )
         unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
 
+    # SVC_MIA on OMD-TCH averaged model
+    for avg_key, state_attr, result_key in [
+        ("omd_tch", "omd_tch_avg_state", "avg_SVC_MIA_forget_efficacy"),
+        ("ada_omd_tch", "ada_omd_result_state", "adaptive_SVC_MIA_forget_efficacy"),
+    ]:
+        avg_state = getattr(args, state_attr, None) if getattr(args, "mtl", False) else None
+        if avg_state is not None and result_key not in evaluation_result:
+            original_state = {name: tensor.detach().clone() for name, tensor in model.state_dict().items()}
+            model.load_state_dict(avg_state, strict=False)
+
+            evaluation_result[result_key] = evaluation.SVC_MIA(
+                shadow_train=shadow_train_loader,
+                shadow_test=test_loader,
+                target_train=None,
+                target_test=forget_loader,
+                model=model,
+                device=device
+            )
+
+            model.load_state_dict(original_state, strict=False)
+            unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
+
     """training privacy MIA:
         in distribution: retain
         out of distribution: test
@@ -324,6 +346,17 @@ def main(args):
         wandb.log({"Forget Entropy": evaluation_result["SVC_MIA_forget_efficacy"]["entropy"]})
         wandb.log({"Forget M_Entropy": evaluation_result["SVC_MIA_forget_efficacy"]["m_entropy"]})
         wandb.log({"Forget Prob": evaluation_result["SVC_MIA_forget_efficacy"]["prob"]})
+
+        for result_key, prefix in [
+            ("avg_SVC_MIA_forget_efficacy", "Avg"),
+            ("adaptive_SVC_MIA_forget_efficacy", "Adaptive"),
+        ]:
+            if result_key in evaluation_result:
+                wandb.log({f"{prefix} Forget Correctness": evaluation_result[result_key]["correctness"]})
+                wandb.log({f"{prefix} Forget Confidence (MIA)": evaluation_result[result_key]["confidence"]})
+                wandb.log({f"{prefix} Forget Entropy": evaluation_result[result_key]["entropy"]})
+                wandb.log({f"{prefix} Forget M_Entropy": evaluation_result[result_key]["m_entropy"]})
+                wandb.log({f"{prefix} Forget Prob": evaluation_result[result_key]["prob"]})
 
         print("Finish Wandb Login")
 
