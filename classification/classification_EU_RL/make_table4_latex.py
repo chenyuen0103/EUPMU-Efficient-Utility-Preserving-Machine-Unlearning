@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+SEED_ROOT_OVERRIDES = {
+    # No seed overrides needed; all seeds collected from default root
+}
+
+
 DISPLAY_NAMES = {
     "retrain": "Retrain",
     "FT": "FT",
@@ -19,8 +24,7 @@ DISPLAY_NAMES = {
     "eu_fast": "EUPMU-fast",
     "gdr_gma": "GDR-GMA",
     "chebyshev": "Chebyshev",
-    "omd_tch": "OMD-TCH",
-    "omd_tch_eg": "AFLeg",
+    "omd_tch_eg": "OMD-TCH-EG",
     "omd_tch_pgd": "OMD-TCH-PGD",
     "ada_omd_tch_eg": "AdaAFLeg",
     "RL_proximal": "SalUn-soft",
@@ -39,16 +43,15 @@ DESCRIPTION_NAMES = {
     "eu": "EUPMU: Efficient implicit unilateral gradient surgery.",
     "eu_fast": "EUPMU-fast: Faster approximation to EUPMU without extra retain recomputation.",
     "chebyshev": "Chebyshev: Augmented Tchebycheff scalarization baseline for retain/forget MOO.",
-    "omd_tch": "OMD-TCH: Online mirror-descent Tchebycheff method with adaptive task reweighting.",
-    "omd_tch_eg": "AFLeg: Exponentiated-gradient OMD-TCH variant.",
-    "omd_tch_pgd": "OMD-TCH-PGD: Projected-gradient OMD-TCH variant.",
+    "omd_tch_eg": "OMD-TCH-EG: Exponentiated-gradient online mirror-descent Tchebycheff method.",
+    "omd_tch_pgd": "OMD-TCH-PGD: Projected-gradient online mirror-descent Tchebycheff method.",
     "ada_omd_tch_eg": "AdaAFLeg: Adaptive exponentiated-gradient OMD-TCH variant with marked-model aggregation.",
     "RL_proximal": "SalUn-soft: Soft-thresholding SalUn-style proximal baseline.",
 }
 
 CANONICAL_METHOD_IDS = {
-    "afleg": "omd_tch",
-    "omd_tch_eg": "omd_tch",
+    "omd_tch": "omd_tch_eg",
+    "afleg": "omd_tch_eg",
     "afl": "omd_tch_pgd",
     "ada_afleg": "ada_omd_tch_eg",
 }
@@ -61,7 +64,6 @@ METHOD_GROUPS = {
     "eu": "gradient_surgery",
     "eu_fast": "gradient_surgery",
     "chebyshev": "tch",
-    "omd_tch": "tch",
     "omd_tch_eg": "tch",
     "omd_tch_pgd": "tch",
     "ada_omd_tch_eg": "tch",
@@ -87,10 +89,9 @@ GROUP_METHOD_ORDER = {
     "eu": 3,
     "eu_fast": 4,
     "chebyshev": 0,
-    "omd_tch": 1,
-    "omd_tch_eg": 2,
-    "omd_tch_pgd": 3,
-    "ada_omd_tch_eg": 4,
+    "omd_tch_eg": 1,
+    "omd_tch_pgd": 2,
+    "ada_omd_tch_eg": 3,
 }
 
 
@@ -140,9 +141,35 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=None,
         help=(
-            "Optional whitelist of method ids to include, e.g. retrain eu chebyshev omd_tch. "
+            "Optional whitelist of method ids to include, e.g. retrain eu chebyshev omd_tch_eg. "
             "Method ids are inferred from directory names."
         ),
+    )
+    parser.add_argument(
+        "--exclude-seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Optional seed ids to exclude, e.g. --exclude-seeds 3.",
+    )
+    parser.add_argument(
+        "--train-run",
+        type=int,
+        default=1,
+        help=(
+            "Only include rows whose folder name ends with this training-run index, e.g. 1 for seed_3_train_1. "
+            "Set a different value to average over another train run."
+        ),
+    )
+    parser.add_argument(
+        "--only-train-tagged",
+        action="store_true",
+        help="Only include results under seed_*_train_* folders.",
+    )
+    parser.add_argument(
+        "--match-seed-train",
+        action="store_true",
+        help="Only include rows where seed id equals train-run id (seed_k_train_k).",
     )
     parser.add_argument(
         "--output",
@@ -152,7 +179,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--caption",
-        default="Table 4 style results on CIFAR-10 class-wise forgetting (10\\%).",
+        default="Table 4 style results on CIFAR-10 class-wise forgetting (10\%).",
         help="Base LaTeX caption.",
     )
     parser.add_argument(
@@ -228,6 +255,34 @@ def infer_method_id(json_path: Path, root: Path) -> str:
     return top
 
 
+def infer_seed_id(json_path: Path, root: Path) -> Optional[int]:
+    rel = json_path.relative_to(root)
+    for part in rel.parts:
+        if part.startswith("seed_"):
+            try:
+                # Extract seed number from format like 'seed_1', 'seed_1_train_1', etc.
+                seed_part = part.split("_", 1)[1]
+                # If format is 'seed_N_train_M', extract N
+                if "_train_" in seed_part:
+                    seed_part = seed_part.split("_train_", 1)[0]
+                return int(seed_part)
+            except ValueError:
+                return None
+    return None
+
+
+def infer_train_run_id(json_path: Path, root: Path) -> Optional[int]:
+    rel = json_path.relative_to(root)
+    for part in rel.parts:
+        if "_train_" not in part:
+            continue
+        try:
+            return int(part.rsplit("_train_", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
 
 
 def format_display_name(method_id: str) -> str:
@@ -266,6 +321,8 @@ def load_row(json_path: Path, root: Path, accuracy_key: str, mia_key: str) -> Op
         "method_id": method_id,
         "display_name": format_display_name(method_id),
         "json_path": json_path,
+        "seed_id": infer_seed_id(json_path, root),
+        "train_run_id": infer_train_run_id(json_path, root),
         "ua": ua,
         "ra": ra,
         "ta": ta,
@@ -274,11 +331,24 @@ def load_row(json_path: Path, root: Path, accuracy_key: str, mia_key: str) -> Op
     }
 
 
-def collect_rows(root: Path, accuracy_key: str, mia_key: str) -> List[Dict[str, object]]:
+def collect_rows(
+    root: Path,
+    accuracy_key: str,
+    mia_key: str,
+    train_run: Optional[int],
+    only_train_tagged: bool,
+    match_seed_train: bool,
+) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     for json_path in sorted(root.glob("**/evaluation_result.json")):
         row = load_row(json_path, root, accuracy_key, mia_key)
         if row is not None:
+            if only_train_tagged and row.get("train_run_id") is None:
+                continue
+            if train_run is not None and train_run >= 0 and row.get("train_run_id") != train_run:
+                continue
+            if match_seed_train and row.get("seed_id") != row.get("train_run_id"):
+                continue
             rows.append(row)
     return rows
 
@@ -289,7 +359,7 @@ def summarize_metric(rows: List[Dict[str, object]], key: str) -> Optional[Dict[s
         return None
     mean = statistics.mean(values)
     std = statistics.stdev(values) if len(values) > 1 else 0.0
-    return {"mean": mean, "std": std}
+    return {"mean": mean, "std": std, "n": len(values)}
 
 
 def aggregate_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -461,9 +531,54 @@ def build_table(
     return "\n".join(header + body + footer) + "\n"
 
 
+def report_seed_counts(rows: List[Dict[str, object]]) -> None:
+    print("Seed counts used for averages:")
+    for row in sorted(rows, key=method_sort_key):
+        metric_counts = []
+        for label, key in [
+            ("UA", "ua"),
+            ("RA", "ra"),
+            ("TA", "ta"),
+            ("MIA", "mia"),
+            ("Avg", "avg_score"),
+        ]:
+            stat = row.get(key)
+            n = stat.get("n", 0) if isinstance(stat, dict) else 0
+            metric_counts.append(f"{label}={n}")
+        print(f"- {row['display_name']}: " + ", ".join(metric_counts))
+    print()
+
+
 def main() -> None:
     args = parse_args()
-    rows = collect_rows(args.root, args.accuracy_key, args.mia_key)
+    rows = collect_rows(
+        args.root,
+        args.accuracy_key,
+        args.mia_key,
+        args.train_run,
+        args.only_train_tagged,
+        args.match_seed_train,
+    )
+
+    # Allow seed-specific result roots, e.g. using rerun artifacts for one seed.
+    # for seed_id, override_root in SEED_ROOT_OVERRIDES.items():
+    #     if not override_root.exists():
+    #         continue
+    #     rows = [row for row in rows if row.get("seed_id") != seed_id]
+    #     rows.extend(
+    #         collect_rows(
+    #             override_root,
+    #             args.accuracy_key,
+    #             args.mia_key,
+    #             args.train_run,
+    #             args.only_train_tagged,
+    #             args.match_seed_train,
+    #         )
+    #     )
+
+    if args.exclude_seeds:
+        excluded = set(args.exclude_seeds)
+        rows = [row for row in rows if row.get("seed_id") not in excluded]
 
     if args.methods is not None:
         allowed = {canonical_method_id(method_id) for method_id in args.methods}
@@ -483,6 +598,8 @@ def main() -> None:
                 "Incomplete seed coverage. Methods below do not have the required number of seeds:\n"
                 + "\n".join(incomplete)
             )
+
+    report_seed_counts(rows)
 
     table = build_table(
         rows,

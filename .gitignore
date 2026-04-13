@@ -25,3 +25,7 @@ SD_Class-wise_unlearn_NSFW_unlearn/EUPMU/src/
 hf-cache/
 *.codex
 *models/
+
+classification/classification_EU_RL/output_*/
+classification/classification_EU_RL/datasets/
+classification/classification_EU_RL/logs_*/

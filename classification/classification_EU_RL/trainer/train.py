@@ -130,7 +130,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, device, mask=N
 
         print("Train accuracy {top1.avg:.3f}".format(top1=top1))
 
-    return top1.avg
+    return {"train_acc": top1.avg, "train_loss": losses.avg}
 
 
 def train_with_rewind(model, optimizer, scheduler, train_loader, criterion, args):

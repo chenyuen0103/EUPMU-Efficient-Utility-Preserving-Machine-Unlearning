@@ -3,10 +3,17 @@ import utils
 from imagenet import get_x_y_from_data_dict
 
 
-def validate(val_loader, model, criterion, args, split="Eva", device=None):
+def validate(val_loader, model, criterion, args, split="Eva", device=None, return_metrics=False):
     """
     Run evaluation
     """
+    if device is None:
+        # Fall back to the model parameter device when callers omit `device`.
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+
     losses = utils.AverageMeter()
     top1 = utils.AverageMeter()
 
@@ -70,4 +77,6 @@ def validate(val_loader, model, criterion, args, split="Eva", device=None):
 
         print("{split} Accuracy {top1.avg:.3f}".format(split=split, top1=top1))
 
+    if return_metrics:
+        return {"accuracy": top1.avg, "loss": losses.avg}
     return top1.avg

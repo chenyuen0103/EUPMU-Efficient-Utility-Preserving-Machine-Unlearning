@@ -18,7 +18,15 @@ def l1_regularization(model):
 
 
 def FT_iter(
-    data_loaders, model, criterion, optimizer, epoch, args, mask=None, with_l1=False
+    data_loaders,
+    model,
+    criterion,
+    optimizer,
+    epoch,
+    args,
+    mask=None,
+    with_l1=False,
+    device=None,
 ):
     train_loader = data_loaders["retain"]
 
@@ -28,11 +36,11 @@ def FT_iter(
     # switch to train mode
     model.train()
 
+    if device is None:
+        device = next(model.parameters()).device
+
     start = time.time()
     if args.imagenet_arch:
-        device = (
-            torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-        )
         for i, data in enumerate(train_loader):
             image, target = get_x_y_from_data_dict(data, device)
             if epoch < args.warmup:
@@ -88,8 +96,8 @@ def FT_iter(
                     epoch, i + 1, optimizer, one_epoch_step=len(train_loader), args=args
                 )
 
-            image = image.cuda()
-            target = target.cuda()
+            image = image.to(device)
+            target = target.to(device)
             if epoch < args.unlearn_epochs - args.no_l1_epochs:
                 current_alpha = args.alpha * (
                     1 - epoch / (args.unlearn_epochs - args.no_l1_epochs)
@@ -135,16 +143,26 @@ def FT_iter(
 
     print("train_accuracy {top1.avg:.3f}".format(top1=top1))
 
-    return top1.avg
+    return {"train_acc": top1.avg, "train_loss": losses.avg}
 
 
 @iterative_unlearn
 def FT(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device=None, weight_method=None):
-    return FT_iter(data_loaders, model, criterion, optimizer, epoch, args, mask)
+    return FT_iter(
+        data_loaders, model, criterion, optimizer, epoch, args, mask, device=device
+    )
 
 
 @iterative_unlearn
 def FT_l1(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device=None, weight_method=None):
     return FT_iter(
-        data_loaders, model, criterion, optimizer, epoch, args, mask, with_l1=True
+        data_loaders,
+        model,
+        criterion,
+        optimizer,
+        epoch,
+        args,
+        mask,
+        with_l1=True,
+        device=device,
     )

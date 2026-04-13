@@ -53,6 +53,20 @@ die() {
   exit 1
 }
 
+normalize_numeric_token() {
+  local value="$1"
+  [[ -n "$value" ]] || return 0
+  "$PYTHON_BIN" - "$value" <<'PY'
+import sys
+
+value = sys.argv[1]
+try:
+    print(str(float(value)))
+except ValueError:
+    print(value)
+PY
+}
+
 require_file() {
   local path="$1"
   [[ -f "$path" ]] || die "missing required file: $path"
@@ -86,9 +100,9 @@ latest_model_dir() {
   local candidates=()
   local path=""
   local filtered=()
-  local expected_alpha="-alpha_${TRAIN_ALPHA}"
+  local expected_alpha="-alpha_$(normalize_numeric_token "$TRAIN_ALPHA")"
   local expected_epochs="-epoch_${TRAIN_EPOCHS}"
-  local expected_lr="-lr_${TRAIN_LR}"
+  local expected_lr="-lr_$(normalize_numeric_token "$TRAIN_LR")"
   local expected_seed=""
   local expected_eu_w_lr=""
   local expected_eu_error=""
@@ -102,8 +116,8 @@ latest_model_dir() {
   fi
 
   if [[ "$MTL_METHOD" == "eu" ]]; then
-    expected_eu_w_lr="-w_lr_${EU_W_LR:-3.0}"
-    expected_eu_error="-err_${EU_ERROR:-0.0}"
+    expected_eu_w_lr="-w_lr_$(normalize_numeric_token "${EU_W_LR:-3.0}")"
+    expected_eu_error="-err_$(normalize_numeric_token "${EU_ERROR:-0.0}")"
   fi
 
   for path in "${candidates[@]}"; do

@@ -6,8 +6,10 @@ import numpy as np
 import pruner
 import torch
 import utils
+import wandb
 from pruner import extract_mask, prune_model_custom, remove_prune
 import json
+from trainer import validate
 
 def plot_training_curve(training_result, save_dir, prefix):
     # plot training curve
@@ -34,6 +36,13 @@ def save_unlearn_checkpoint(model, evaluation_result, args):
     data = json.dumps(evaluation_result)
     with open(os.path.join(save_dir_final, "evaluation_result.json"), 'w') as f:
         f.write(data)
+
+
+def save_training_log(training_log, args):
+    save_dir_final = args.save_dir
+    os.makedirs(save_dir_final, exist_ok=True)
+    with open(os.path.join(save_dir_final, "training_log.json"), "w") as f:
+        json.dump(training_log, f, indent=2)
 
 
 def load_unlearn_checkpoint(model, device, args):
@@ -195,7 +204,7 @@ def _iterative_unlearn_impl(unlearn_iter_func):
 
         avg_state = None
         avg_step_count = 0
-        if args.mtl and getattr(args, "mtl_method", None) in {"omd_tch", "omd_tch_eg", "omd_tch_pgd", "afleg", "afl"}:
+        if args.mtl and getattr(args, "mtl_method", None) in {"omd_tch_eg", "omd_tch_pgd", "afleg", "afl"}:
             setattr(args, "omd_tch_avg_state", None)
             setattr(args, "omd_tch_avg_steps", 0)
         if args.mtl and getattr(args, "mtl_method", None) in {"ada_omd_tch_eg", "ada_afleg"}:
@@ -212,17 +221,181 @@ def _iterative_unlearn_impl(unlearn_iter_func):
                     epoch, optimizer.state_dict()["param_groups"][0]["lr"]
                 )
             )
-            train_acc = unlearn_iter_func(
+
+            # Snapshot params before epoch to compute update norm afterwards
+            params_before = {
+                name: param.data.detach().clone()
+                for name, param in model.named_parameters()
+                if param.requires_grad
+            }
+
+            epoch_result = unlearn_iter_func(
                 data_loaders, model, criterion, optimizer, epoch, args, mask, device=device, weight_method=weight_method, **kwargs
             )
+            if isinstance(epoch_result, dict):
+                epoch_metrics = dict(epoch_result)
+                train_acc = epoch_metrics.get("train_acc")
+            else:
+                train_acc = epoch_result
+                epoch_metrics = {"train_acc": train_acc}
 
             # OMD-TCH averaging is handled inside the batch loop so it matches the paper's
             # online-to-batch averaging over optimization iterates rather than epoch endpoints.
 
             scheduler.step()
 
-            print("one epoch duration:{}".format(time.time() - start_time))
-            print("Train Acc:{}".format(round(train_acc,2)))
+            epoch_duration = time.time() - start_time
+            print("one epoch duration:{}".format(epoch_duration))
+            if train_acc is not None:
+                print("Train Acc:{}".format(round(float(train_acc), 2)))
+            else:
+                print("Train Acc:None")
+
+            # ------------------------------------------------------------------
+            # Epoch-level parameter update norm
+            # ------------------------------------------------------------------
+            param_update_norm = sum(
+                (param.data - params_before[name]).norm(2).item() ** 2
+                for name, param in model.named_parameters()
+                if param.requires_grad and name in params_before
+            ) ** 0.5
+            epoch_metrics["param_update_norm"] = param_update_norm
+
+            # ------------------------------------------------------------------
+            # Per-split validation: retain / forget / test accuracy & loss
+            # ------------------------------------------------------------------
+            model.eval()
+            split_val_metrics = {}
+            for split_name, loader in data_loaders.items():
+                # Save current transform so training is unaffected
+                root_ds = loader.dataset
+                while hasattr(root_ds, "dataset"):
+                    root_ds = root_ds.dataset
+                saved_transform = getattr(root_ds, "transform", None)
+                utils.dataset_convert_to_test(loader.dataset, args)
+
+                val_out = validate(loader, model, criterion, args, split_name, device, return_metrics=True)
+                split_val_metrics[split_name] = {
+                    "accuracy": float(val_out["accuracy"]),
+                    "loss": float(val_out["loss"]),
+                }
+
+                # Restore transform for next training epoch
+                if saved_transform is not None:
+                    root_ds.transform = saved_transform
+            model.train()
+
+            retain_acc  = split_val_metrics.get("retain", {}).get("accuracy", None)
+            forget_acc_raw = split_val_metrics.get("forget", {}).get("accuracy", None)
+            # UA convention: higher = more forgotten
+            forget_acc  = round(100.0 - forget_acc_raw, 2) if forget_acc_raw is not None else None
+            test_acc    = split_val_metrics.get("test", {}).get("accuracy", None)
+            forget_loss = split_val_metrics.get("forget", {}).get("loss", None)
+            retain_loss = split_val_metrics.get("retain", {}).get("loss", None)
+
+            epoch_metrics.update({
+                "retain_acc": retain_acc,
+                "forget_acc": forget_acc,
+                "test_acc":   test_acc,
+                "forget_loss": forget_loss,
+                "retain_loss": retain_loss,
+            })
+
+            print(
+                "Epoch {:3d} | Retain Acc {:.2f} | Forget Acc (UA) {:.2f} | Test Acc {:.2f} | "
+                "Forget Loss {:.4f} | Retain Loss {:.4f} | Param Update Norm {:.4f}".format(
+                    epoch,
+                    retain_acc  if retain_acc  is not None else float("nan"),
+                    forget_acc  if forget_acc  is not None else float("nan"),
+                    test_acc    if test_acc    is not None else float("nan"),
+                    forget_loss if forget_loss is not None else float("nan"),
+                    retain_loss if retain_loss is not None else float("nan"),
+                    param_update_norm,
+                )
+            )
+
+            # ------------------------------------------------------------------
+            # RL-specific reward statistics
+            # (loss on forget set with fresh random labels = RL training signal)
+            # ------------------------------------------------------------------
+            if getattr(args, "unlearn", None) == "RL":
+                forget_loader = data_loaders.get("forget")
+                if forget_loader is not None:
+                    rl_batch_losses = []
+                    model.eval()
+                    with torch.no_grad():
+                        for _img, _tgt in forget_loader:
+                            _img = _img.to(device)
+                            _rand_tgt = torch.randint(0, args.num_classes, _tgt.shape, device=device)
+                            _out = model(_img)
+                            _loss = criterion(_out, _rand_tgt)
+                            rl_batch_losses.append(_loss.item())
+                    model.train()
+                    rl_reward_stats = {
+                        "mean": float(np.mean(rl_batch_losses)),
+                        "std":  float(np.std(rl_batch_losses)),
+                        "min":  float(np.min(rl_batch_losses)),
+                        "max":  float(np.max(rl_batch_losses)),
+                    }
+                    epoch_metrics["rl_reward"] = rl_reward_stats
+                    print(
+                        "       RL Reward | mean {:.4f} std {:.4f} min {:.4f} max {:.4f}".format(
+                            rl_reward_stats["mean"], rl_reward_stats["std"],
+                            rl_reward_stats["min"],  rl_reward_stats["max"],
+                        )
+                    )
+
+            # ------------------------------------------------------------------
+            # Wandb logging
+            # ------------------------------------------------------------------
+            if wandb.run is not None:
+                log_dict = {
+                    "epoch/retain_acc":        retain_acc,
+                    "epoch/forget_acc_ua":     forget_acc,
+                    "epoch/test_acc":          test_acc,
+                    "epoch/forget_loss":       forget_loss,
+                    "epoch/retain_loss":       retain_loss,
+                    "epoch/param_update_norm": param_update_norm,
+                }
+                if "grad_norm_avg" in epoch_metrics:
+                    log_dict["epoch/grad_norm"] = epoch_metrics["grad_norm_avg"]
+                if "rl_label_overlap" in epoch_metrics:
+                    log_dict["epoch/rl_label_overlap"]       = epoch_metrics["rl_label_overlap"]
+                    log_dict["epoch/rl_label_overlap_ratio"] = epoch_metrics["rl_label_overlap_ratio"]
+                if "rl_reward" in epoch_metrics:
+                    rr = epoch_metrics["rl_reward"]
+                    log_dict["epoch/rl_reward_mean"] = rr["mean"]
+                    log_dict["epoch/rl_reward_std"]  = rr["std"]
+                    log_dict["epoch/rl_reward_min"]  = rr["min"]
+                    log_dict["epoch/rl_reward_max"]  = rr["max"]
+                wandb.log({k: v for k, v in log_dict.items() if v is not None}, step=epoch)
+
+            # ------------------------------------------------------------------
+            # Persist to training log
+            # ------------------------------------------------------------------
+            training_log = getattr(args, "training_log", None)
+            if training_log is None:
+                training_log = {}
+            training_log.setdefault("epochs", [])
+            epoch_entry = {
+                "epoch": epoch,
+                "lr": float(optimizer.state_dict()["param_groups"][0]["lr"]),
+                "duration_sec": float(epoch_duration),
+            }
+            for key, value in epoch_metrics.items():
+                if isinstance(value, torch.Tensor):
+                    value = value.detach().cpu().item()
+                elif isinstance(value, np.generic):
+                    value = value.item()
+                if isinstance(value, dict):
+                    epoch_entry[key] = value
+                elif isinstance(value, (int, float)):
+                    epoch_entry[key] = float(value)
+                else:
+                    epoch_entry[key] = value
+            training_log["epochs"].append(epoch_entry)
+            setattr(args, "training_log", training_log)
+            save_training_log(training_log, args)
 
     return _wrapped
 

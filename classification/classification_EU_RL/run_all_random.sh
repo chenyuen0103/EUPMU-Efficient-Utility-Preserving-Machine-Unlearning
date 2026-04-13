@@ -3,33 +3,25 @@ set -euo pipefail
 
 ARCH="${ARCH:-resnet18}"
 DATASET="${DATASET:-cifar10}"
-CLASS_TO_REPLACE="${CLASS_TO_REPLACE:-0}"
+CLASS_TO_REPLACE="${CLASS_TO_REPLACE:--1}"
+NUM_INDEXES_TO_REPLACE="${NUM_INDEXES_TO_REPLACE:-4500}"
 GPU="${GPU:-0}"
 LOCAL_GPU="${LOCAL_GPU:-0}"
-SAVE_DIR="${SAVE_DIR:-output}"
+SAVE_DIR="${SAVE_DIR:-output_random_subset}"
 SEED="${SEED:-2}"
 TRAIN_SEED="${TRAIN_SEED:-$SEED}"
 MASK="${MASK:-pretrained_models/resnet18/cifar10/model_SA_best.pth.tar}"
-SALUN_MASK_PATH="${SALUN_MASK_PATH:-saliency_maps/resnet18/cifar10/forget_10.0%/with_0.5.pt}"
+SALUN_MASK_PATH="${SALUN_MASK_PATH:-saliency_maps_random_subset/resnet18/cifar10/random_10.0%/with_0.5.pt}"
 RUN_SALUN_MASK_GEN="${RUN_SALUN_MASK_GEN:-0}"
 RUN_SALUN="${RUN_SALUN:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 WANDB_ENTITY_TAG="${WANDB_ENTITY_TAG:-None}"
-FORGET_TAG="${FORGET_TAG:-forget_10.0%}"
+FORGET_TAG="${FORGET_TAG:-random_10.0%}"
 RUN_OMD_ABLATION_GRID="${RUN_OMD_ABLATION_GRID:-0}"
 OMD_ABLATION_ETAS="${OMD_ABLATION_ETAS:-0.01 0.03 0.1}"
 RUN_LOG_NAME="${RUN_LOG_NAME:-run.log}"
-SKIP_RETRAIN="${SKIP_RETRAIN:-0}"
-MAX_PARALLEL_JOBS="${MAX_PARALLEL_JOBS:-4}"
-GPU_ALLOWLIST="${GPU_ALLOWLIST:-}"
 
-declare -A ALLOWED_GPU=()
-if [[ -n "$GPU_ALLOWLIST" ]]; then
-  read -r -a GPU_ALLOWLIST_ARRAY <<< "$GPU_ALLOWLIST"
-  for gpu in "${GPU_ALLOWLIST_ARRAY[@]}"; do
-    ALLOWED_GPU["$gpu"]=1
-  done
-fi
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU}"
 
 run() {
   echo
@@ -84,141 +76,6 @@ run_if_needed_any() {
   run_with_log "$result_path" "$@"
 }
 
-eligible_gpus() {
-  local gpu_index free_mb
-
-  while IFS=, read -r gpu_index free_mb; do
-    gpu_index="${gpu_index//[[:space:]]/}"
-    free_mb="${free_mb//[[:space:]]/}"
-
-    if [[ -n "$GPU_ALLOWLIST" && -z "${ALLOWED_GPU[$gpu_index]+x}" ]]; then
-      continue
-    fi
-    if [[ -n "${BUSY_GPUS[$gpu_index]+x}" ]]; then
-      continue
-    fi
-    if (( free_mb > MIN_FREE_MB )); then
-      printf '%s\n' "$gpu_index"
-    fi
-  done < <(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits)
-}
-
-reap_finished_job() {
-  local finished_pid=""
-  local exit_code=0
-
-  if wait -n -p finished_pid; then
-    exit_code=0
-  else
-    exit_code=$?
-  fi
-
-  if [[ -z "$finished_pid" ]]; then
-    return 0
-  fi
-
-  local finished_gpu="${PID_TO_GPU[$finished_pid]:-}"
-  local finished_result="${PID_TO_RESULT[$finished_pid]:-}"
-
-  if [[ -n "$finished_gpu" ]]; then
-    unset 'BUSY_GPUS[$finished_gpu]'
-  fi
-  unset 'PID_TO_GPU[$finished_pid]'
-  unset 'PID_TO_RESULT[$finished_pid]'
-  ((active_jobs -= 1))
-
-  if (( exit_code == 0 )); then
-    echo "Finished ${finished_result} on GPU ${finished_gpu}."
-  else
-    echo "Job ${finished_result} failed on GPU ${finished_gpu} with exit code ${exit_code}." >&2
-    FAILURES+=("result=${finished_result} gpu=${finished_gpu} exit_code=${exit_code}")
-  fi
-}
-
-wait_for_slot() {
-  while (( active_jobs >= MAX_PARALLEL_JOBS )); do
-    reap_finished_job
-  done
-}
-
-schedule_if_needed() {
-  local result_path="$1"
-  shift
-
-  if [[ -f "$result_path" ]]; then
-    echo
-    echo "[skip] Found existing result: $result_path"
-    return 0
-  fi
-
-  local result_dir log_path gpu
-  result_dir="$(dirname "$result_path")"
-  log_path="$result_dir/$RUN_LOG_NAME"
-  mkdir -p "$result_dir"
-
-  while true; do
-    wait_for_slot
-    mapfile -t AVAILABLE_GPUS < <(eligible_gpus)
-    if (( ${#AVAILABLE_GPUS[@]} > 0 )); then
-      gpu="${AVAILABLE_GPUS[0]}"
-      break
-    fi
-    if (( active_jobs > 0 )); then
-      reap_finished_job
-    else
-      echo
-      echo "No eligible GPU found with more than ${MIN_FREE_MB} MB free; retrying in ${POLL_SECONDS}s."
-      sleep "$POLL_SECONDS"
-    fi
-  done
-
-  echo
-  echo "============================================================"
-  echo "$*"
-  echo "GPU: ${gpu}"
-  echo "Log: ${log_path}"
-  echo "============================================================"
-
-  GPU="$gpu" \
-  LOCAL_GPU="$gpu" \
-  CUDA_VISIBLE_DEVICES="$gpu" \
-  SEED="$SEED" \
-  TRAIN_SEED="$TRAIN_SEED" \
-  SAVE_DIR="$SAVE_DIR" \
-  WANDB_ENTITY_TAG="$WANDB_ENTITY_TAG" \
-  "$@" --gpu "$gpu" >"$log_path" 2>&1 &
-  pid=$!
-
-  BUSY_GPUS["$gpu"]=1
-  PID_TO_GPU["$pid"]="$gpu"
-  PID_TO_RESULT["$pid"]="$result_path"
-  ((active_jobs += 1))
-}
-
-schedule_if_needed_any() {
-  local result_path="$1"
-  local alias_path="$2"
-  shift 2
-
-  if [[ -f "$result_path" ]]; then
-    echo
-    echo "[skip] Found existing result: $result_path"
-    return 0
-  fi
-  if [[ -n "$alias_path" && -f "$alias_path" ]]; then
-    echo
-    echo "[skip] Found equivalent existing result: $alias_path"
-    return 0
-  fi
-  schedule_if_needed "$result_path" "$@"
-}
-
-declare -A BUSY_GPUS=()
-declare -A PID_TO_GPU=()
-declare -A PID_TO_RESULT=()
-declare -a FAILURES=()
-active_jobs=0
-
 method_result_path() {
   local method="$1"
   printf '%s/%s/%s/%s/%s/%s/evaluation_result.json' \
@@ -240,8 +97,10 @@ BASE_FORGET_ARGS=(
   --arch "$ARCH"
   --dataset "$DATASET"
   --class_to_replace "$CLASS_TO_REPLACE"
+  --num_indexes_to_replace "$NUM_INDEXES_TO_REPLACE"
   --mask "$MASK"
   --save_dir "$SAVE_DIR"
+  --gpu "$LOCAL_GPU"
   --seed "$SEED"
   --train_seed "$TRAIN_SEED"
   --wandb_entity "$WANDB_ENTITY_TAG"
@@ -251,44 +110,44 @@ BASE_RANDOM_ARGS=(
   --arch "$ARCH"
   --dataset "$DATASET"
   --class_to_replace "$CLASS_TO_REPLACE"
+  --num_indexes_to_replace "$NUM_INDEXES_TO_REPLACE"
   --mask "$MASK"
   --save_dir "$SAVE_DIR"
+  --gpu "$LOCAL_GPU"
   --seed "$SEED"
   --train_seed "$TRAIN_SEED"
   --wandb_entity "$WANDB_ENTITY_TAG"
 )
 
-if (( SKIP_RETRAIN == 0 )); then
-  schedule_if_needed "$(method_result_path retrain)" \
-    "$PYTHON_BIN" -u main_forget.py \
-    "${BASE_FORGET_ARGS[@]}" \
-    --unlearn retrain \
-    --unlearn_epochs 160 \
-    --unlearn_lr 0.1
-fi
+run_if_needed "$(method_result_path retrain)" \
+  "$PYTHON_BIN" -u main_forget.py \
+  "${BASE_FORGET_ARGS[@]}" \
+  --unlearn retrain \
+  --unlearn_epochs 160 \
+  --unlearn_lr 0.1
 
-schedule_if_needed "$(method_result_path FT)" \
+run_if_needed "$(method_result_path FT)" \
   "$PYTHON_BIN" -u main_forget.py \
   "${BASE_FORGET_ARGS[@]}" \
   --unlearn FT \
   --unlearn_epochs 5 \
   --unlearn_lr 1e-2
 
-schedule_if_needed "$(method_result_path GA)" \
+run_if_needed "$(method_result_path GA)" \
   "$PYTHON_BIN" -u main_forget.py \
   "${BASE_FORGET_ARGS[@]}" \
   --unlearn GA \
   --unlearn_epochs 5 \
   --unlearn_lr 3e-4
 
-schedule_if_needed "$(method_result_path wfisher)" \
+run_if_needed "$(method_result_path wfisher)" \
   "$PYTHON_BIN" -u main_forget.py \
   "${BASE_FORGET_ARGS[@]}" \
   --unlearn wfisher \
   --unlearn_epochs 5 \
   --alpha 2
 
-schedule_if_needed "$(method_result_path FT_prune)" \
+run_if_needed "$(method_result_path FT_prune)" \
   "$PYTHON_BIN" -u main_forget.py \
   "${BASE_FORGET_ARGS[@]}" \
   --unlearn FT_prune \
@@ -296,14 +155,14 @@ schedule_if_needed "$(method_result_path FT_prune)" \
   --unlearn_lr 1e-2 \
   --alpha 1e-4
 
-schedule_if_needed "$(plain_rl_result_path)" \
+run_if_needed "$(plain_rl_result_path)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
   --unlearn_epochs 5 \
   --unlearn_lr 1e-3
 
-schedule_if_needed "$(mtl_result_path famo)" \
+run_if_needed "$(mtl_result_path famo)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -312,7 +171,7 @@ schedule_if_needed "$(mtl_result_path famo)" \
   --mtl \
   --mtl_method famo
 
-schedule_if_needed "$(mtl_result_path igs)" \
+run_if_needed "$(mtl_result_path igs)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -321,7 +180,7 @@ schedule_if_needed "$(mtl_result_path igs)" \
   --mtl \
   --mtl_method igs
 
-schedule_if_needed "$(mtl_result_path eu)" \
+run_if_needed "$(mtl_result_path eu)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -332,7 +191,7 @@ schedule_if_needed "$(mtl_result_path eu)" \
   --eu_w_lr 1 \
   --eu_error 0.01
 
-schedule_if_needed "$(mtl_result_path eu_fast)" \
+run_if_needed "$(mtl_result_path eu_fast)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -343,7 +202,7 @@ schedule_if_needed "$(mtl_result_path eu_fast)" \
   --eu_w_lr 1 \
   --eu_error 0.01
 
-schedule_if_needed "$(mtl_result_path gdr_gma)" \
+run_if_needed "$(mtl_result_path gdr_gma)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -352,7 +211,7 @@ schedule_if_needed "$(mtl_result_path gdr_gma)" \
   --mtl \
   --mtl_method gdr_gma
 
-schedule_if_needed "$(mtl_result_path chebyshev)" \
+run_if_needed "$(mtl_result_path chebyshev)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -366,14 +225,14 @@ schedule_if_needed "$(mtl_result_path chebyshev)" \
   --cheby_forget_ref 0.0 \
   --cheby_rho 1e-3
 
-schedule_if_needed "$(mtl_result_path omd_tch_eg)" \
+run_if_needed "$(mtl_result_path omd_tch)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
   --unlearn_epochs 5 \
   --unlearn_lr 1e-3 \
   --mtl \
-  --mtl_method omd_tch_eg \
+  --mtl_method omd_tch \
   --omd_tch_retain_weight 1.0 \
   --omd_tch_forget_weight 1.0 \
   --omd_tch_retain_ref 0.0 \
@@ -381,7 +240,7 @@ schedule_if_needed "$(mtl_result_path omd_tch_eg)" \
   --omd_tch_eta 0.1 \
   --omd_tch_rho 0.0
 
-schedule_if_needed "$(mtl_result_path afl)" \
+run_if_needed "$(mtl_result_path afl)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -396,7 +255,7 @@ schedule_if_needed "$(mtl_result_path afl)" \
   --omd_tch_eta 0.1 \
   --omd_tch_rho 0.0
 
-schedule_if_needed_any "$(mtl_result_path afleg)" "$(mtl_result_path omd_tch_eg)" \
+run_if_needed_any "$(mtl_result_path afleg)" "$(mtl_result_path omd_tch)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -411,7 +270,7 @@ schedule_if_needed_any "$(mtl_result_path afleg)" "$(mtl_result_path omd_tch_eg)
   --omd_tch_eta 0.1 \
   --omd_tch_rho 0.0
 
-schedule_if_needed "$(mtl_result_path ada_afleg)" \
+run_if_needed "$(mtl_result_path ada_afleg)" \
   "$PYTHON_BIN" -u main_random.py \
   "${BASE_RANDOM_ARGS[@]}" \
   --unlearn RL \
@@ -431,25 +290,67 @@ if [[ "$RUN_OMD_ABLATION_GRID" == "1" ]]; then
   for ETA in $OMD_ABLATION_ETAS; do
     ETA_TAG="eta_${ETA//./p}"
 
-    schedule_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/omd_tch_eg/afleg_${ETA_TAG}/evaluation_result.json"       "$PYTHON_BIN" -u main_random.py       "${BASE_RANDOM_ARGS[@]}"       --unlearn RL       --unlearn_epochs 5       --unlearn_lr 1e-3       --mtl       --mtl_method omd_tch_eg       --wandb_entity "afleg_${ETA_TAG}"       --omd_tch_retain_weight 1.0       --omd_tch_forget_weight 1.0       --omd_tch_retain_ref 0.0       --omd_tch_forget_ref 0.0       --omd_tch_eta "$ETA"       --omd_tch_rho 0.0
+    run_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/omd_tch_eg/afleg_${ETA_TAG}/evaluation_result.json" \
+      "$PYTHON_BIN" -u main_random.py \
+      "${BASE_RANDOM_ARGS[@]}" \
+      --save_dir "$SAVE_DIR" \
+      --unlearn RL \
+      --unlearn_epochs 5 \
+      --unlearn_lr 1e-3 \
+      --mtl \
+      --mtl_method omd_tch_eg \
+      --wandb_entity "afleg_${ETA_TAG}" \
+      --omd_tch_retain_weight 1.0 \
+      --omd_tch_forget_weight 1.0 \
+      --omd_tch_retain_ref 0.0 \
+      --omd_tch_forget_ref 0.0 \
+      --omd_tch_eta "$ETA" \
+      --omd_tch_rho 0.0
 
-    schedule_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/omd_tch_pgd/afl_${ETA_TAG}/evaluation_result.json"       "$PYTHON_BIN" -u main_random.py       "${BASE_RANDOM_ARGS[@]}"       --unlearn RL       --unlearn_epochs 5       --unlearn_lr 1e-3       --mtl       --mtl_method omd_tch_pgd       --wandb_entity "afl_${ETA_TAG}"       --omd_tch_retain_weight 1.0       --omd_tch_forget_weight 1.0       --omd_tch_retain_ref 0.0       --omd_tch_forget_ref 0.0       --omd_tch_eta "$ETA"       --omd_tch_rho 0.0
+    run_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/omd_tch_pgd/afl_${ETA_TAG}/evaluation_result.json" \
+      "$PYTHON_BIN" -u main_random.py \
+      "${BASE_RANDOM_ARGS[@]}" \
+      --save_dir "$SAVE_DIR" \
+      --unlearn RL \
+      --unlearn_epochs 5 \
+      --unlearn_lr 1e-3 \
+      --mtl \
+      --mtl_method omd_tch_pgd \
+      --wandb_entity "afl_${ETA_TAG}" \
+      --omd_tch_retain_weight 1.0 \
+      --omd_tch_forget_weight 1.0 \
+      --omd_tch_retain_ref 0.0 \
+      --omd_tch_forget_ref 0.0 \
+      --omd_tch_eta "$ETA" \
+      --omd_tch_rho 0.0
 
-    schedule_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/ada_omd_tch_eg/ada_afleg_${ETA_TAG}/evaluation_result.json"       "$PYTHON_BIN" -u main_random.py       "${BASE_RANDOM_ARGS[@]}"       --unlearn RL       --unlearn_epochs 5       --unlearn_lr 1e-3       --mtl       --mtl_method ada_omd_tch_eg       --wandb_entity "ada_afleg_${ETA_TAG}"       --omd_tch_retain_weight 1.0       --omd_tch_forget_weight 1.0       --omd_tch_retain_ref 0.0       --omd_tch_forget_ref 0.0       --omd_tch_eta "$ETA"       --omd_tch_rho 0.0
+    run_if_needed "${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/ada_omd_tch_eg/ada_afleg_${ETA_TAG}/evaluation_result.json" \
+      "$PYTHON_BIN" -u main_random.py \
+      "${BASE_RANDOM_ARGS[@]}" \
+      --save_dir "$SAVE_DIR" \
+      --unlearn RL \
+      --unlearn_epochs 5 \
+      --unlearn_lr 1e-3 \
+      --mtl \
+      --mtl_method ada_omd_tch_eg \
+      --wandb_entity "ada_afleg_${ETA_TAG}" \
+      --omd_tch_retain_weight 1.0 \
+      --omd_tch_forget_weight 1.0 \
+      --omd_tch_retain_ref 0.0 \
+      --omd_tch_forget_ref 0.0 \
+      --omd_tch_eta "$ETA" \
+      --omd_tch_rho 0.0
   done
 fi
-
-while (( active_jobs > 0 )); do
-  reap_finished_job
-done
 
 if [[ "$RUN_SALUN_MASK_GEN" == "1" ]]; then
   run "$PYTHON_BIN" generate_mask.py \
     --arch "$ARCH" \
     --dataset "$DATASET" \
     --class_to_replace "$CLASS_TO_REPLACE" \
+    --num_indexes_to_replace "$NUM_INDEXES_TO_REPLACE" \
     --mask "$MASK" \
-    --save_dir saliency_maps/
+    --save_dir saliency_maps_random_subset/
 fi
 
 if [[ "$RUN_SALUN" == "1" ]]; then

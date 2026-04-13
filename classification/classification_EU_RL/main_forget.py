@@ -15,6 +15,17 @@ import wandb
 from trainer import validate
 
 
+def canonicalize_method_id(method_id: str) -> str:
+    """Canonicalize method names to their canonical forms for unified directory naming."""
+    canonical_map = {
+        "omd_tch": "omd_tch_eg",
+        "afleg": "omd_tch_eg",
+        "afl": "omd_tch_pgd",
+        "ada_afleg": "ada_omd_tch_eg",
+    }
+    return canonical_map.get(method_id, method_id)
+
+
 def main(args):
     if torch.cuda.is_available():
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -129,6 +140,13 @@ def main(args):
     unlearn_data_loaders = OrderedDict(
         retain=retain_loader, forget=forget_loader, test=test_loader
     )
+    args.training_log = {
+        "method": args.unlearn,
+        "seed": args.seed,
+        "train_seed": args.train_seed,
+        "epochs": [],
+        "final_validation": {},
+    }
 
 
     criterion = nn.CrossEntropyLoss()
@@ -167,16 +185,42 @@ def main(args):
         accuracy = {}
         for name, loader in unlearn_data_loaders.items():
             utils.dataset_convert_to_test(loader.dataset, args)
-            val_acc = validate(loader, model, criterion, args, name, device)
+            val_metrics = validate(
+                loader, model, criterion, args, name, device, return_metrics=True
+            )
+            val_acc = float(val_metrics["accuracy"])
+            val_loss = float(val_metrics["loss"])
             if name == "forget":
                 accuracy[name] = round(100 - val_acc, 2)
             else:
                 accuracy[name] = round(val_acc, 2)
+            args.training_log["final_validation"][name] = {
+                "accuracy": val_acc,
+                "loss": val_loss,
+                "reported_accuracy": accuracy[name],
+            }
             print(f"{name} acc: {val_acc}")
 
 
         evaluation_result["accuracy"] = accuracy
         unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
+
+    if not args.training_log["final_validation"]:
+        for name, loader in unlearn_data_loaders.items():
+            utils.dataset_convert_to_test(loader.dataset, args)
+            val_metrics = validate(
+                loader, model, criterion, args, name, device, return_metrics=True
+            )
+            val_acc = float(val_metrics["accuracy"])
+            val_loss = float(val_metrics["loss"])
+            reported_accuracy = (
+                round(100 - val_acc, 2) if name == "forget" else round(val_acc, 2)
+            )
+            args.training_log["final_validation"][name] = {
+                "accuracy": val_acc,
+                "loss": val_loss,
+                "reported_accuracy": reported_accuracy,
+            }
 
     for deprecated in ["MIA", "SVC_MIA", "SVC_MIA_forget"]:
         if deprecated in evaluation_result:
@@ -211,6 +255,8 @@ def main(args):
             device=device
         )
         unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
+
+    unlearn.save_training_log(args.training_log, args)
 
     """training privacy MIA:
         in distribution: retain

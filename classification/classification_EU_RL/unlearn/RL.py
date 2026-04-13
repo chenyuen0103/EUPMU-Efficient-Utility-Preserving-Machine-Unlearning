@@ -22,13 +22,26 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
     if True:
         if  args.dataset == "cifar10" or args.dataset == "cifar100" or args.dataset == "TinyImagenet":
             try:
+                _true_targets = np.array(forget_dataset.targets)
                 forget_dataset.targets = np.random.randint(0, args.num_classes, forget_dataset.targets.shape)
+                _random_targets = np.array(forget_dataset.targets)
             except:
                 print(forget_dataset.dataset.targets[:10])
+                _true_targets = np.array(forget_dataset.dataset.targets)
                 forget_dataset.dataset.targets = np.random.randint(0, args.num_classes, len(forget_dataset.dataset.targets))
+                _random_targets = np.array(forget_dataset.dataset.targets)
                 print(forget_dataset.dataset.targets[:10])
         else:
+            _true_targets = np.array(forget_dataset.labels)
             forget_dataset.labels = np.random.randint(0, args.num_classes, forget_dataset.labels.shape)
+            _random_targets = np.array(forget_dataset.labels)
+
+        # --- Gap 2: random-label / true-label overlap (key RL diagnostic) ---
+        _overlap = float(np.mean(_random_targets == _true_targets))
+        _expected_overlap = 1.0 / args.num_classes
+        print(f"[SEED {args.seed} | Epoch {epoch}] RL label overlap: "
+              f"{_overlap:.4f} (expected ~{_expected_overlap:.4f}, "
+              f"ratio={_overlap/_expected_overlap:.2f}x)")
 
         retain_dataset = retain_loader.dataset
 
@@ -52,6 +65,7 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
         losses = utils.AverageMeter()
         top1 = utils.AverageMeter()
+        grad_norms = utils.AverageMeter()
 
         # switch to train mode
         model.train()
@@ -126,6 +140,12 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
                         if param.grad is not None:
                             param.grad *= mask[name]
 
+                _gn = sum(
+                    p.grad.detach().norm(2).item() ** 2
+                    for p in model.parameters() if p.grad is not None
+                ) ** 0.5
+                grad_norms.update(_gn, 1)
+
                 update_ada_omd_marked_state(args, model, [loss_retain.detach(), loss_forget.detach()])
                 # The OMD-TCH paper averages optimization iterates over rounds; we therefore
                 # snapshot the current iterate before each optimizer step.
@@ -152,9 +172,10 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
                         loss_retain2 = criterion(output_clean_[retain_indexes], target[retain_indexes]) * (
                                     len(retain_indexes) / len(target_label))
                         weight_method.method.update(loss_retain2.detach())
-                        wandb.log({"EU_weight": weight_method.method.w})
-                        wandb.log({"retain_loss": loss_retain})
-                        wandb.log({"forget_loss": loss_forget})
+                        if wandb.run is not None:
+                            wandb.log({"EU_weight": weight_method.method.w})
+                            wandb.log({"retain_loss": loss_retain})
+                            wandb.log({"forget_loss": loss_forget})
 
 
             elif args.retainwithAllParamUpdate:
@@ -174,6 +195,12 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
 
                 loss_retain.backward()
 
+                _gn = sum(
+                    p.grad.detach().norm(2).item() ** 2
+                    for p in model.parameters() if p.grad is not None
+                ) ** 0.5
+                grad_norms.update(_gn, 1)
+
                 optimizer.step()
                 loss =  loss_forget+loss_retain
             else:
@@ -186,6 +213,12 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
                     for name, param in model.named_parameters():
                         if param.grad is not None:
                             param.grad *= mask[name]
+
+                _gn = sum(
+                    p.grad.detach().norm(2).item() ** 2
+                    for p in model.parameters() if p.grad is not None
+                ) ** 0.5
+                grad_norms.update(_gn, 1)
 
                 optimizer.step()
 
@@ -280,6 +313,13 @@ def RL(data_loaders, model, criterion, optimizer, epoch, args, mask=None, device
         wandb.log({"lr": lr}, step=epoch)
         wandb.log({"Train Top1 Acc": top1.avg}, step=epoch)
         wandb.log({"Train Loss": losses.avg}, step=epoch)
+        wandb.log({"Grad Norm (train avg)": grad_norms.avg}, step=epoch)
         wandb.log({"epoch": epoch})
 
-    return top1.avg
+    return {
+        "train_acc": top1.avg,
+        "train_loss": losses.avg,
+        "grad_norm_avg": grad_norms.avg,
+        "rl_label_overlap": _overlap,
+        "rl_label_overlap_ratio": _overlap / (1.0 / args.num_classes),
+    }

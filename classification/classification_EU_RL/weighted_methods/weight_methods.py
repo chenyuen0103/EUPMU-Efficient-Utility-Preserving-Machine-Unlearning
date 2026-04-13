@@ -900,10 +900,6 @@ class AdaOMDTCHEG(OMDTCHBase):
         super().__init__(*args, update_rule="eg", adaptive=True, **kwargs)
 
 
-# Backward-compatible alias: the original omd_tch entry now refers to the EG variant.
-OMDTCH = OMDTCHEG
-
-
 METHODS = dict(
     cagrad=CAGrad,
     famo=FAMO,
@@ -912,7 +908,6 @@ METHODS = dict(
     gdr_gma = GDR_GMA,
     igs = ImplicitGradientSurgery,
     chebyshev = Chebyshev,
-    omd_tch = OMDTCHEG,
     omd_tch_eg = OMDTCHEG,
     omd_tch_pgd = OMDTCHPGD,
     ada_omd_tch_eg = AdaOMDTCHEG,

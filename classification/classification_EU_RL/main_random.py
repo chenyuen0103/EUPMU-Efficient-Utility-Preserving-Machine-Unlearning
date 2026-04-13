@@ -4,6 +4,7 @@ from collections import OrderedDict
 
 import arg_parser
 import evaluation
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim
@@ -17,6 +18,17 @@ from weighted_methods.weight_methods import WeightMethods
 
 # import pruner
 from trainer import validate
+
+
+def canonicalize_method_id(method_id: str) -> str:
+    """Canonicalize method names to their canonical forms for unified directory naming."""
+    canonical_map = {
+        "omd_tch": "omd_tch_eg",
+        "afleg": "omd_tch_eg",
+        "afl": "omd_tch_pgd",
+        "ada_afleg": "ada_omd_tch_eg",
+    }
+    return canonical_map.get(method_id, method_id)
 
 
 def evaluate_model_state(model, state_dict, unlearn_data_loaders, criterion, args, device):
@@ -143,7 +155,7 @@ def main(args):
 
     print(f"number of retain dataset {len(retain_dataset)}")
     print(f"number of forget dataset {len(forget_dataset)}")
-
+    
     forget_ratio = len(forget_dataset) / (len(retain_dataset) + len(forget_dataset))
     save_components = [
         args.save_dir,
@@ -153,7 +165,8 @@ def main(args):
         args.unlearn,
     ]
     if args.mtl and args.mtl_method is not None:
-        save_components.append(args.mtl_method)
+        canonical_method = canonicalize_method_id(args.mtl_method)
+        save_components.append(canonical_method)
     save_components.append(f"{args.wandb_entity}")
     args.save_dir = os.path.join(*save_components)
 
@@ -165,6 +178,29 @@ def main(args):
     unlearn_data_loaders = OrderedDict(
         retain=retain_loader, forget=forget_loader, test=test_loader
     )
+
+    # --- Gap 1: forget set composition (logged once at startup) ---
+    try:
+        _forget_targets = torch.tensor(forget_dataset.targets)
+    except AttributeError:
+        _forget_targets = torch.tensor(forget_dataset.labels)
+    _forget_class_dist = torch.bincount(_forget_targets, minlength=getattr(args, "num_classes", 10)).tolist()
+    forget_set_info = {
+        "size": len(forget_dataset),
+        "retain_size": len(retain_dataset),
+        "class_distribution": _forget_class_dist,
+    }
+    print(f"[SEED {args.seed}] Forget set size: {forget_set_info['size']}, "
+          f"class dist: {_forget_class_dist}")
+
+    args.training_log = {
+        "method": args.unlearn,
+        "seed": args.seed,
+        "train_seed": args.train_seed,
+        "forget_set_info": forget_set_info,
+        "epochs": [],
+        "final_validation": {},
+    }
 
     criterion = nn.CrossEntropyLoss()
 
@@ -194,7 +230,6 @@ def main(args):
             wandb.watch(model, log="all")
 
         unlearn_method = unlearn.get_unlearn_method(args.unlearn)
-
         if args.mtl:
             # weight method
             weight_methods_parameters = extract_weight_method_parameters_from_args(args)
@@ -202,6 +237,7 @@ def main(args):
             unlearn_method(unlearn_data_loaders, model, criterion, args, mask, device, weight_method)
         else:
             unlearn_method(unlearn_data_loaders, model, criterion, args, mask, device)
+            
 
         unlearn.save_unlearn_checkpoint(model, None, args)
 
@@ -210,19 +246,47 @@ def main(args):
         evaluation_result = {}
 
     if "new_accuracy" not in evaluation_result:
+        # --- Gap 3: verify forget set targets are original (non-negative) at eval time ---
+        _eval_forget_loader = unlearn_data_loaders["forget"]
+        try:
+            _eval_forget_targets = np.array(_eval_forget_loader.dataset.targets)
+        except AttributeError:
+            _eval_forget_targets = np.array(_eval_forget_loader.dataset.labels)
+        _negative_count = int((_eval_forget_targets < 0).sum())
+        print(f"[SEED {args.seed}] Forget targets at eval: "
+              f"{_negative_count} negative (should be 0), "
+              f"min={_eval_forget_targets.min()}, max={_eval_forget_targets.max()}")
+        if _negative_count > 0:
+            print(f"  WARNING: forget dataset still contains {_negative_count} marked (negative) targets at eval time!")
+        args.training_log["forget_target_integrity"] = {
+            "negative_count_at_eval": _negative_count,
+            "target_min": int(_eval_forget_targets.min()),
+            "target_max": int(_eval_forget_targets.max()),
+        }
+
         accuracy = {}
         for name, loader in unlearn_data_loaders.items():
             utils.dataset_convert_to_test(loader.dataset, args)
-            val_acc = validate(loader, model, criterion, args, name, device)
+            val_metrics = validate(
+                loader, model, criterion, args, name, device, return_metrics=True
+            )
+            val_acc = float(val_metrics["accuracy"])
+            val_loss = float(val_metrics["loss"])
+
             if name == "forget":
                 accuracy[name] = round(100 - val_acc, 2)
             else:
                 accuracy[name] = round(val_acc, 2)
+            args.training_log["final_validation"][name] = {
+                "accuracy": val_acc,
+                "loss": val_loss,
+                "reported_accuracy": accuracy[name],
+            }
             print(f"{name} acc: {val_acc}")
 
         evaluation_result["accuracy"] = accuracy
 
-        if args.mtl and getattr(args, "mtl_method", None) in {"omd_tch", "omd_tch_eg", "omd_tch_pgd", "afleg", "afl"} and getattr(args, "omd_tch_avg_state", None) is not None:
+        if args.mtl and getattr(args, "mtl_method", None) in {"omd_tch_eg", "omd_tch_pgd", "afleg", "afl"} and getattr(args, "omd_tch_avg_state", None) is not None:
             avg_accuracy = evaluate_model_state(
                 model,
                 args.omd_tch_avg_state,
@@ -245,6 +309,23 @@ def main(args):
             evaluation_result["adaptive_accuracy"] = adaptive_accuracy
 
         unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
+
+    if not args.training_log["final_validation"]:
+        for name, loader in unlearn_data_loaders.items():
+            utils.dataset_convert_to_test(loader.dataset, args)
+            val_metrics = validate(
+                loader, model, criterion, args, name, device, return_metrics=True
+            )
+            val_acc = float(val_metrics["accuracy"])
+            val_loss = float(val_metrics["loss"])
+            reported_accuracy = (
+                round(100 - val_acc, 2) if name == "forget" else round(val_acc, 2)
+            )
+            args.training_log["final_validation"][name] = {
+                "accuracy": val_acc,
+                "loss": val_loss,
+                "reported_accuracy": reported_accuracy,
+            }
 
     for deprecated in ["MIA", "SVC_MIA", "SVC_MIA_forget"]:
         if deprecated in evaluation_result:
@@ -312,6 +393,7 @@ def main(args):
     #     unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
 
     unlearn.save_unlearn_checkpoint(model, evaluation_result, args)
+    unlearn.save_training_log(args.training_log, args)
 
     if wandb.run is not None:
 

@@ -141,7 +141,7 @@ def extract_weight_method_parameters_from_args(args):
         "eta": args.omd_tch_eta,
         "rho": args.omd_tch_rho,
     }
-    for name in ["omd_tch", "omd_tch_eg", "omd_tch_pgd", "ada_omd_tch_eg", "ada_afleg", "afleg", "afl"]:
+    for name in ["omd_tch_eg", "omd_tch_pgd", "ada_omd_tch_eg", "ada_afleg", "afleg", "afl"]:
         method_parameters[name].update(omd_params)
 
     return method_parameters

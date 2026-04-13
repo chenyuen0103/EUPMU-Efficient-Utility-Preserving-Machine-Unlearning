@@ -4,11 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SEEDS="${SEEDS:-1 2 3 4 5}"
 FIXED_TRAIN_SEED="${FIXED_TRAIN_SEED:-1}"
-SAVE_DIR="${SAVE_DIR:-output}"
-WANDB_ENTITY_TAG_PREFIX="${WANDB_ENTITY_TAG_PREFIX:-seed_}"
+SAVE_DIR="${SAVE_DIR:-output_random_subset}"
+WANDB_ENTITY_TAG_PREFIX="${WANDB_ENTITY_TAG_PREFIX:-random_seed_}"
 MIN_FREE_MB="${MIN_FREE_MB:-10000}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
-LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"
+LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs_random_subset}"
 GPU_ALLOWLIST="${GPU_ALLOWLIST:-}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
@@ -113,18 +113,18 @@ launch_seed() {
 
   echo
   echo "############################################################"
-  echo "Running class-wise suite for seed ${seed} on GPU ${gpu}"
+  echo "Running random-subset suite for seed ${seed} on GPU ${gpu}"
   echo "Log: ${log_path}"
   echo "############################################################"
 
   SEED="$seed" \
   TRAIN_SEED="$train_seed" \
   SAVE_DIR="$SAVE_DIR" \
-  WANDB_ENTITY_TAG="${WANDB_ENTITY_TAG_PREFIX}${seed}_train_1" \
+  WANDB_ENTITY_TAG="${WANDB_ENTITY_TAG_PREFIX}${seed}_train_${train_seed}" \
   CUDA_VISIBLE_DEVICES="$gpu" \
   GPU="$gpu" \
   LOCAL_GPU="0" \
-  bash ./run_all_classwise.sh >"$log_path" 2>&1 &
+  bash ./run_all_random.sh >"$log_path" 2>&1 &
   pid=$!
 
   BUSY_GPUS["$gpu"]=1

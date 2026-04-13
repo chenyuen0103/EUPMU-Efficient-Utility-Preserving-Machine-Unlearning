@@ -3,7 +3,7 @@ from .RL import RL
 from .FT import FT,FT_l1
 from .FT_prune import FT_prune
 from .retrain import retrain
-from .impl import load_unlearn_checkpoint, save_unlearn_checkpoint
+from .impl import load_unlearn_checkpoint, save_training_log, save_unlearn_checkpoint
 from .Wfisher import Wfisher
 
 from .RL_pro import RL_proximal

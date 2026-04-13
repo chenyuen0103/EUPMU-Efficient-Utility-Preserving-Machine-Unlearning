@@ -161,4 +161,4 @@ def RL_proximal(data_loaders, model, criterion, optimizer, epoch, args, mask=Non
                start = time.time()
 
 
-    return top1.avg
+    return {"train_acc": top1.avg, "train_loss": losses.avg}

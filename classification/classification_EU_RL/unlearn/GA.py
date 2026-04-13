@@ -120,7 +120,7 @@ def GA(data_loaders, model, criterion, optimizer, epoch, args, mask = None, devi
 
     print("train_accuracy {top1.avg:.3f}".format(top1=top1))
 
-    return top1.avg
+    return {"train_acc": top1.avg, "train_loss": losses.avg}
 
 
 @iterative_unlearn
@@ -173,4 +173,4 @@ def GA_l1(data_loaders, model, criterion, optimizer, epoch, args, device=None, w
 
     print("train_accuracy {top1.avg:.3f}".format(top1=top1))
 
-    return top1.avg
+    return {"train_acc": top1.avg, "train_loss": losses.avg}
