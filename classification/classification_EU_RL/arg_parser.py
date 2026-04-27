@@ -187,5 +187,25 @@ def parse_args():
     parser.add_argument("--omd_tch_rho", default=0.0, type=float, help="Optional augmentation coefficient for OMD-TCH; paper-consistent default is 0.0")
     parser.add_argument("--percent_pruning_min", default=0, type=float)
     parser.add_argument("--percent_pruning_max", default=100, type=float)
+    parser.add_argument(
+        "--forget_loss_type",
+        type=str,
+        default="rl",
+        choices=["rl", "ga"],
+        help="How to compute the forget loss in OMD-TCH (and RL-based methods): "
+             "'rl' = random labeling (default), 'ga' = gradient ascent (negate true-label loss)",
+    )
+    parser.add_argument(
+        "--rl_label_debug_samples",
+        default=0,
+        type=int,
+        help="If > 0, print this many stable forget-set label assignments per epoch.",
+    )
+    parser.add_argument(
+        "--rl_label_debug_dump",
+        action="store_true",
+        default=False,
+        help="Dump full per-epoch forget-set random labels to save_dir/rl_label_debug/.",
+    )
 
     return parser.parse_args()

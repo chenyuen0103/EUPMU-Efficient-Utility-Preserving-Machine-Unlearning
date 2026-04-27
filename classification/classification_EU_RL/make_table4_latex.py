@@ -19,7 +19,7 @@ DISPLAY_NAMES = {
     "famo": "FAMO",
     "igs": "UNGrad",
     "FT_prune": "l1-sparse",
-    "RL": "Linearization",
+    "RL": "RL",
     "eu": "EUPMU",
     "eu_fast": "EUPMU-fast",
     "gdr_gma": "GDR-GMA",
@@ -32,7 +32,7 @@ DISPLAY_NAMES = {
 
 DESCRIPTION_NAMES = {
     "retrain": "Retrain: Full retraining after removing the forget set.",
-    "RL": "Linearization: Random-label unlearning baseline on the forget set.",
+    "RL": "RL: Random-label unlearning baseline on the forget set.",
     "FT": "FT: Plain fine-tuning baseline without special unlearning machinery.",
     "GA": "GA: Gradient-ascent baseline that pushes against the forget objective.",
     "wfisher": "IU: Weighted-Fisher influence-based unlearning baseline.",
@@ -252,6 +252,15 @@ def infer_method_id(json_path: Path, root: Path) -> str:
             return f"{parts[1]}/{parts[2]}"
         if len(parts) >= 3 and parts[1] != "None":
             return parts[1]
+
+    # When the root is already at .../RL, sweep runs look like:
+    #   omd_tch_eg/seed_5_train_1/eta_.../evaluation_result.json
+    # Group those by the hyperparameter-setting folder so each variant gets
+    # one average across seeds.
+    if len(parts) >= 3 and parts[1].startswith("seed_"):
+        if len(parts) >= 4 and not parts[2].endswith(".json"):
+            return f"{parts[0]}/{parts[2]}"
+        return parts[0]
     return top
 
 
@@ -290,7 +299,7 @@ def format_display_name(method_id: str) -> str:
         return DISPLAY_NAMES.get(method_id, method_id)
     base, tag = method_id.split("/", 1)
     base_name = DISPLAY_NAMES.get(base, base)
-    if "eta_" in tag:
+    if tag.startswith("eta_") and tag.count("_") == 1:
         eta = tag.split("eta_", 1)[1].replace("p", ".")
         return f"{base_name} ({eta})"
     return f"{base_name} [{tag}]"
@@ -345,7 +354,15 @@ def collect_rows(
         if row is not None:
             if only_train_tagged and row.get("train_run_id") is None:
                 continue
-            if train_run is not None and train_run >= 0 and row.get("train_run_id") != train_run:
+            effective_train_run_id = row.get("train_run_id")
+            # Retrain folders are typically seed_k (no _train_ tag); treat them as train_run=1.
+            if (
+                effective_train_run_id is None
+                and row.get("method_id") == "retrain"
+                and isinstance(row.get("seed_id"), int)
+            ):
+                effective_train_run_id = 1
+            if train_run is not None and train_run >= 0 and effective_train_run_id != train_run:
                 continue
             if match_seed_train and row.get("seed_id") != row.get("train_run_id"):
                 continue
@@ -582,7 +599,12 @@ def main() -> None:
 
     if args.methods is not None:
         allowed = {canonical_method_id(method_id) for method_id in args.methods}
-        rows = [row for row in rows if canonical_method_id(str(row["method_id"])) in allowed]
+        rows = [
+            row
+            for row in rows
+            if canonical_method_id(str(row["method_id"])) in allowed
+            or canonical_method_id(str(row["method_id"])) .split("/", 1)[0] in allowed
+        ]
     else:
         rows = [row for row in rows if "/" not in str(row["method_id"])]
 

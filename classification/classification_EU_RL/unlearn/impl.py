@@ -350,6 +350,7 @@ def _iterative_unlearn_impl(unlearn_iter_func):
             # ------------------------------------------------------------------
             if wandb.run is not None:
                 log_dict = {
+                    "epoch":                    epoch,
                     "epoch/retain_acc":        retain_acc,
                     "epoch/forget_acc_ua":     forget_acc,
                     "epoch/test_acc":          test_acc,
@@ -368,7 +369,9 @@ def _iterative_unlearn_impl(unlearn_iter_func):
                     log_dict["epoch/rl_reward_std"]  = rr["std"]
                     log_dict["epoch/rl_reward_min"]  = rr["min"]
                     log_dict["epoch/rl_reward_max"]  = rr["max"]
-                wandb.log({k: v for k, v in log_dict.items() if v is not None}, step=epoch)
+                # Keep a single monotonic W&B step stream; explicit step=epoch can
+                # conflict with batch-level auto-step logs and be dropped.
+                wandb.log({k: v for k, v in log_dict.items() if v is not None})
 
             # ------------------------------------------------------------------
             # Persist to training log

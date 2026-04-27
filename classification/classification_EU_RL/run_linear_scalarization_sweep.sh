@@ -4,11 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ARCH="${ARCH:-resnet18}"
-DATASET="${DATASET:-cifar100}"
-CLASS_TO_REPLACE="${CLASS_TO_REPLACE:-0}"
+DATASET="${DATASET:-cifar10}"
+CLASSES="${CLASSES:-0 1 2 3 4 5 6 7 8 9}"
 FORGET_TAG="${FORGET_TAG:-forget_10.0%}"
-MASK="${MASK:-pretrained_models/resnet18/cifar100/model_SA_best.pth.tar}"
-SAVE_DIR="${SAVE_DIR:-output_cifar100}"
+MASK="${MASK:-pretrained_models/resnet18/cifar10/model_SA_best.pth.tar}"
+SAVE_DIR="${SAVE_DIR:-output_classwise_ga}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SEEDS="${SEEDS:-1 2 3 4 5}"
 FIXED_TRAIN_SEED="${FIXED_TRAIN_SEED:-1}"
@@ -18,24 +18,12 @@ MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-2}"
 POLL_SECONDS="${POLL_SECONDS:-10}"
 GPU_ALLOWLIST="${GPU_ALLOWLIST:-}"
 
-# OMD-TCH defaults in this repo (no eta sweep by default).
-OMD_METHODS="${OMD_METHODS:-omd_tch_eg omd_tch_pgd}"
-OMD_ETAS_EG="${OMD_ETAS_EG:-0.1}"
-OMD_ETAS_PGD="${OMD_ETAS_PGD:-0.1}"
-OMD_RETAIN_WEIGHTS="${OMD_RETAIN_WEIGHTS:-1.0}"
-OMD_FORGET_WEIGHTS="${OMD_FORGET_WEIGHTS:-1.0}"
-
-# OMD-TCH reference points and forget loss type.
-OMD_RETAIN_REF="${OMD_RETAIN_REF:-0}"
-OMD_FORGET_REF="${OMD_FORGET_REF:--1.5}"
+LS_UNLEARN_EPOCHS="${LS_UNLEARN_EPOCHS:-5}"
+LS_UNLEARN_LR="${LS_UNLEARN_LR:-1e-3}"
 FORGET_LOSS_TYPE="${FORGET_LOSS_TYPE:-ga}"
 
 # Weights & Biases — set WANDB_PROJECT to enable logging (empty = disabled).
-WANDB_PROJECT="${WANDB_PROJECT:-}"
-
-# Generic training args are intentionally fixed here.
-UNLEARN_EPOCHS="${UNLEARN_EPOCHS:-5 50}"
-UNLEARN_LR="${UNLEARN_LR:-1e-3}"
+WANDB_PROJECT="${WANDB_PROJECT:-eupmu_linear_scalarization}"
 RUN_LOG_NAME="${RUN_LOG_NAME:-run.log}"
 
 cd "$SCRIPT_DIR"
@@ -94,35 +82,17 @@ then
   exit 1
 fi
 
-alias_to_canonical_method() {
-  local method="$1"
-  case "$method" in
-    omd_tch|afleg) echo "omd_tch_eg" ;;
-    afl) echo "omd_tch_pgd" ;;
-    ada_afleg) echo "ada_omd_tch_eg" ;;
-    *) echo "$method" ;;
-  esac
-}
-
-eta_tag() {
-  local eta="$1"
-  eta="${eta//-/_neg_}"
-  eta="${eta//./p}"
-  echo "$eta"
-}
-
-weight_tag() {
-  local weight="$1"
-  weight="${weight//-/_neg_}"
-  weight="${weight//./p}"
-  echo "$weight"
+float_tag() {
+  local value="$1"
+  value="${value//-/_neg_}"
+  value="${value//./p}"
+  echo "$value"
 }
 
 run_with_log() {
   local result_path="$1"
   local gpu="$2"
-  shift
-  shift
+  shift 2
 
   local result_dir
   local log_path
@@ -244,93 +214,48 @@ declare -a FAILURES=()
 active_jobs=0
 
 read -r -a SEED_LIST <<< "$SEEDS"
-read -r -a METHOD_LIST <<< "$OMD_METHODS"
-read -r -a RETAIN_WEIGHT_LIST <<< "$OMD_RETAIN_WEIGHTS"
-read -r -a FORGET_WEIGHT_LIST <<< "$OMD_FORGET_WEIGHTS"
-read -r -a EPOCH_LIST <<< "$UNLEARN_EPOCHS"
+read -r -a CLASS_LIST <<< "$CLASSES"
+read -r -a EPOCH_LIST <<< "$LS_UNLEARN_EPOCHS"
 
-echo "OMD-TCH-specific hyperparameters in this repo:"
-echo "  method variant: OMDTCH-EG / OMDTCH-PGD / AdaOMDTCH-EG"
-echo "  omd_tch_eta: mirror-descent step size"
-echo "  omd_tch_retain_weight, omd_tch_forget_weight: per-task loss scaling before OMD updates"
-echo
-echo "Not swept because the implementation fixes them to the paper setting:"
-echo "  omd_tch_retain_ref = 0.0"
-echo "  omd_tch_forget_ref = 0.0"
-echo "  omd_tch_rho = 0.0"
+echo "Linear Scalarization sweep"
+echo "  classes: ${CLASSES}"
+echo "  unlearn_lr: ${LS_UNLEARN_LR}"
+echo "  unlearn_epochs: ${LS_UNLEARN_EPOCHS}"
 
-for seed in "${SEED_LIST[@]}"; do
-  for method in "${METHOD_LIST[@]}"; do
-    case "$method" in
-      ada_omd_tch_eg|ada_afleg)
-        echo "[skip] Adaptive OMD methods are disabled in this sweep: $method"
+for class_to_replace in "${CLASS_LIST[@]}"; do
+  for seed in "${SEED_LIST[@]}"; do
+    for epochs in "${EPOCH_LIST[@]}"; do
+      run_tag="seed_${seed}_train_${FIXED_TRAIN_SEED}"
+      class_tag="class_${class_to_replace}"
+      setting_tag="ulr_$(float_tag "$LS_UNLEARN_LR")_epoch_${epochs}_flt_${FORGET_LOSS_TYPE}"
+      result_path="${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/linear_scalarization/${class_tag}/${run_tag}/${setting_tag}/evaluation_result.json"
+
+      if [[ -f "$result_path" ]]; then
+        echo
+        echo "[skip] Found existing result: $result_path"
         continue
-        ;;
-    esac
-    canonical_method="$(alias_to_canonical_method "$method")"
-    case "$canonical_method" in
-      omd_tch_eg)
-        read -r -a ETA_LIST <<< "$OMD_ETAS_EG"
-        ;;
-      omd_tch_pgd)
-        read -r -a ETA_LIST <<< "$OMD_ETAS_PGD"
-        ;;
-      *)
-        echo "[skip] Unknown OMD method: $canonical_method"
-        continue
-        ;;
-    esac
-    for eta in "${ETA_LIST[@]}"; do
-      eta_suffix="$(eta_tag "$eta")"
-      for retain_weight in "${RETAIN_WEIGHT_LIST[@]}"; do
-        retain_suffix="$(weight_tag "$retain_weight")"
-        for forget_weight in "${FORGET_WEIGHT_LIST[@]}"; do
-          forget_suffix="$(weight_tag "$forget_weight")"
-          for epochs in "${EPOCH_LIST[@]}"; do
+      fi
 
-            forget_ref_suffix="$(eta_tag "$OMD_FORGET_REF")"
-            run_tag="seed_${seed}_train_${FIXED_TRAIN_SEED}"
-            setting_tag="eta_${eta_suffix}_rw_${retain_suffix}_fw_${forget_suffix}_fref_${forget_ref_suffix}_epoch_${epochs}_flt_${FORGET_LOSS_TYPE}"
-            result_path="${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/${canonical_method}/${run_tag}/${setting_tag}/evaluation_result.json"
+      wandb_entity="${class_tag}/${run_tag}/${setting_tag}"
+      wandb_args=(--wandb_entity "$wandb_entity")
+      if [[ -n "$WANDB_PROJECT" ]]; then
+        wandb_args+=(--wandb_project "$WANDB_PROJECT")
+      fi
 
-            if [[ -f "$result_path" ]]; then
-              echo
-              echo "[skip] Found existing result: $result_path"
-              continue
-            fi
-
-            # wandb_entity doubles as the save-dir suffix in main_random.py — always pass it.
-            wandb_entity="${run_tag}/${setting_tag}"
-            wandb_args=(--wandb_entity "$wandb_entity")
-            if [[ -n "$WANDB_PROJECT" ]]; then
-              wandb_args+=(--wandb_project "$WANDB_PROJECT")
-            fi
-
-            schedule_if_needed "$result_path" \
-              "$PYTHON_BIN" -u main_random.py \
-              --arch "$ARCH" \
-              --dataset "$DATASET" \
-              --class_to_replace "$CLASS_TO_REPLACE" \
-              --mask "$MASK" \
-              --save_dir "$SAVE_DIR" \
-              --seed "$seed" \
-              --train_seed "$FIXED_TRAIN_SEED" \
-              "${wandb_args[@]}" \
-              --unlearn RL \
-              --unlearn_epochs "$epochs" \
-              --unlearn_lr "$UNLEARN_LR" \
-              --mtl \
-              --mtl_method "$canonical_method" \
-              --omd_tch_retain_weight "$retain_weight" \
-              --omd_tch_forget_weight "$forget_weight" \
-              --omd_tch_retain_ref "$OMD_RETAIN_REF" \
-              --omd_tch_forget_ref "$OMD_FORGET_REF" \
-              --omd_tch_eta "$eta" \
-              --omd_tch_rho 0.0 \
-              --forget_loss_type "$FORGET_LOSS_TYPE"
-          done
-        done
-      done
+      schedule_if_needed "$result_path" \
+        "$PYTHON_BIN" -u main_random.py \
+        --arch "$ARCH" \
+        --dataset "$DATASET" \
+        --class_to_replace "$class_to_replace" \
+        --mask "$MASK" \
+        --save_dir "$SAVE_DIR" \
+        --seed "$seed" \
+        --train_seed "$FIXED_TRAIN_SEED" \
+        "${wandb_args[@]}" \
+        --unlearn RL \
+        --unlearn_epochs "$epochs" \
+        --unlearn_lr "$LS_UNLEARN_LR" \
+        --forget_loss_type "$FORGET_LOSS_TYPE"
     done
   done
 done
@@ -341,10 +266,10 @@ done
 
 if (( ${#FAILURES[@]} > 0 )); then
   echo
-  echo "Some OMD-TCH sweep jobs failed:" >&2
+  echo "Some Linear Scalarization sweep jobs failed:" >&2
   printf '  %s\n' "${FAILURES[@]}" >&2
   exit 1
 fi
 
 echo
-echo "OMD-TCH sweep completed."
+echo "Linear Scalarization sweep completed."

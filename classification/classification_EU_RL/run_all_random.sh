@@ -16,6 +16,8 @@ RUN_SALUN_MASK_GEN="${RUN_SALUN_MASK_GEN:-0}"
 RUN_SALUN="${RUN_SALUN:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 WANDB_ENTITY_TAG="${WANDB_ENTITY_TAG:-None}"
+# Weights & Biases — set WANDB_PROJECT to enable logging (empty = disabled).
+WANDB_PROJECT="${WANDB_PROJECT:-}"
 FORGET_TAG="${FORGET_TAG:-random_10.0%}"
 RUN_OMD_ABLATION_GRID="${RUN_OMD_ABLATION_GRID:-0}"
 OMD_ABLATION_ETAS="${OMD_ABLATION_ETAS:-0.01 0.03 0.1}"
@@ -105,6 +107,7 @@ BASE_FORGET_ARGS=(
   --train_seed "$TRAIN_SEED"
   --wandb_entity "$WANDB_ENTITY_TAG"
 )
+[[ -n "$WANDB_PROJECT" ]] && BASE_FORGET_ARGS+=(--wandb_project "$WANDB_PROJECT")
 
 BASE_RANDOM_ARGS=(
   --arch "$ARCH"
@@ -118,6 +121,7 @@ BASE_RANDOM_ARGS=(
   --train_seed "$TRAIN_SEED"
   --wandb_entity "$WANDB_ENTITY_TAG"
 )
+[[ -n "$WANDB_PROJECT" ]] && BASE_RANDOM_ARGS+=(--wandb_project "$WANDB_PROJECT")
 
 run_if_needed "$(method_result_path retrain)" \
   "$PYTHON_BIN" -u main_forget.py \

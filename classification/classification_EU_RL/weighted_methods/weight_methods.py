@@ -777,12 +777,11 @@ class OMDTCHBase(WeightMethod):
             raise ValueError("update_rule must be 'eg' or 'pgd'")
         #if any(float(v) != 0.0 for v in reference_point):
         #    raise ValueError("OMD-TCH in this repo follows the paper and requires zero reference_point.")
-        if float(rho) != 0.0:
-            raise ValueError("OMD-TCH in this repo follows the paper and does not use rho augmentation.")
 
         self.task_weights = torch.tensor(task_weights, dtype=torch.float32, device=device)
         self.reference_point = torch.tensor(reference_point, dtype=torch.float32, device=device)
         self.eta = eta
+        self.rho = float(rho)
         self.update_rule = update_rule
         self.adaptive = adaptive
         self.simplex_weights = torch.full((n_tasks,), 1.0 / n_tasks, dtype=torch.float32, device=device)
@@ -867,7 +866,9 @@ class OMDTCHBase(WeightMethod):
             simplex_weights = torch.softmax(self.dual_state.to(losses.device, losses.dtype), dim=0)
         else:
             simplex_weights = self.simplex_weights.to(losses.device, losses.dtype)
-        scalarized = torch.sum(simplex_weights.detach() * weighted_losses)
+        scalarized_term = torch.sum(simplex_weights.detach() * weighted_losses)
+        augmentation = weighted_losses.sum() * losses.new_tensor(self.rho)
+        scalarized = scalarized_term + augmentation
 
         with torch.no_grad():
             scores = self._compute_scores(weighted_losses)
@@ -880,8 +881,10 @@ class OMDTCHBase(WeightMethod):
             "omd_weights": simplex_weights.detach().clone(),
             "updated_omd_weights": updated_weights.detach().clone(),
             "eta": self.eta,
+            "rho": self.rho,
             "variant": self.variant_name,
-            "scalarized_term": scalarized.detach().clone(),
+            "scalarized_term": scalarized_term.detach().clone(),
+            "augmentation": augmentation.detach().clone(),
         }
         if self.adaptive:
             extra_outputs["adaptive_scores"] = scores.detach().clone()
