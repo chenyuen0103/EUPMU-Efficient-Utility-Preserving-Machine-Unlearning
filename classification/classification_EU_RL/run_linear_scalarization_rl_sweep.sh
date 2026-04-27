@@ -8,7 +8,7 @@ DATASET="${DATASET:-cifar10}"
 CLASSES="${CLASSES:-0 1 2 3 4 5 6 7 8 9}"
 FORGET_TAG="${FORGET_TAG:-forget_10.0%}"
 MASK="${MASK:-pretrained_models/resnet18/cifar10/model_SA_best.pth.tar}"
-SAVE_DIR="${SAVE_DIR:-output_classwise_ga}"
+SAVE_DIR="${SAVE_DIR:-output_classwise}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SEEDS="${SEEDS:-1 2 3 4 5}"
 FIXED_TRAIN_SEED="${FIXED_TRAIN_SEED:-1}"
@@ -18,25 +18,18 @@ MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-2}"
 POLL_SECONDS="${POLL_SECONDS:-10}"
 GPU_ALLOWLIST="${GPU_ALLOWLIST:-}"
 
-# EUPMU-GA settings.
-EUPMU_METHODS="${EUPMU_METHODS:-eu}"
-EU_W_LRS="${EU_W_LRS:-1}"
-EU_ERRORS="${EU_ERRORS:-0.01}"
-EU_RETAIN_REF="${EU_RETAIN_REF:-0.0}"
-EU_FORGET_REF="${EU_FORGET_REF:--10.0}"
-EU_UNLEARN_EPOCHS="${EU_UNLEARN_EPOCHS:-5}"
-EU_UNLEARN_LR="${EU_UNLEARN_LR:-1e-3}"
-EU_FAST_UNLEARN_LR="${EU_FAST_UNLEARN_LR:-2e-3}"
-FORGET_LOSS_TYPE="${FORGET_LOSS_TYPE:-ga}"
+LS_UNLEARN_EPOCHS="${LS_UNLEARN_EPOCHS:-5}"
+LS_UNLEARN_LR="${LS_UNLEARN_LR:-1e-3}"
+FORGET_LOSS_TYPE="${FORGET_LOSS_TYPE:-rl}"
 
-if [[ "$FORGET_LOSS_TYPE" != "ga" ]]; then
-  echo "This GA variant expects FORGET_LOSS_TYPE=ga, got: $FORGET_LOSS_TYPE" >&2
-  echo "Use run_eupmu_sweep.sh for random-label mode." >&2
+if [[ "$FORGET_LOSS_TYPE" != "rl" ]]; then
+  echo "This RL variant expects FORGET_LOSS_TYPE=rl, got: $FORGET_LOSS_TYPE" >&2
+  echo "Use run_linear_scalarization_sweep.sh for gradient-ascent mode." >&2
   exit 1
 fi
 
 # Weights & Biases — set WANDB_PROJECT to enable logging (empty = disabled).
-WANDB_PROJECT="${WANDB_PROJECT:-eupmu_ga}"
+WANDB_PROJECT="${WANDB_PROJECT:-eupmu_linear_scalarization_rl}"
 RUN_LOG_NAME="${RUN_LOG_NAME:-run.log}"
 
 cd "$SCRIPT_DIR"
@@ -228,86 +221,49 @@ active_jobs=0
 
 read -r -a SEED_LIST <<< "$SEEDS"
 read -r -a CLASS_LIST <<< "$CLASSES"
-read -r -a METHOD_LIST <<< "$EUPMU_METHODS"
-read -r -a EU_W_LR_LIST <<< "$EU_W_LRS"
-read -r -a EU_ERROR_LIST <<< "$EU_ERRORS"
-read -r -a EPOCH_LIST <<< "$EU_UNLEARN_EPOCHS"
+read -r -a EPOCH_LIST <<< "$LS_UNLEARN_EPOCHS"
 
-echo "EUPMU-GA sweep"
-echo "  methods:          ${EUPMU_METHODS}"
-echo "  classes:          ${CLASSES}"
-echo "  eu_w_lr:          ${EU_W_LRS}"
-echo "  eu_error:         ${EU_ERRORS}"
-echo "  eu_retain_ref:    ${EU_RETAIN_REF}"
-echo "  eu_forget_ref:    ${EU_FORGET_REF}"
-echo "  unlearn_epochs:   ${EU_UNLEARN_EPOCHS}"
+echo "Linear Scalarization RL sweep"
+echo "  classes: ${CLASSES}"
+echo "  unlearn_lr: ${LS_UNLEARN_LR}"
+echo "  unlearn_epochs: ${LS_UNLEARN_EPOCHS}"
 echo "  forget_loss_type: ${FORGET_LOSS_TYPE}"
-echo "  save_dir:         ${SAVE_DIR}"
+echo "  save_dir: ${SAVE_DIR}"
 
 for class_to_replace in "${CLASS_LIST[@]}"; do
   for seed in "${SEED_LIST[@]}"; do
-    for method in "${METHOD_LIST[@]}"; do
-      case "$method" in
-        eu)
-          method_unlearn_lr="$EU_UNLEARN_LR"
-          ;;
-        eu_fast)
-          method_unlearn_lr="$EU_FAST_UNLEARN_LR"
-          ;;
-        *)
-          echo "[skip] Unknown EUPMU method: $method"
-          continue
-          ;;
-      esac
+    for epochs in "${EPOCH_LIST[@]}"; do
+      run_tag="seed_${seed}_train_${FIXED_TRAIN_SEED}"
+      class_tag="class_${class_to_replace}"
+      setting_tag="ulr_$(float_tag "$LS_UNLEARN_LR")_epoch_${epochs}_flt_${FORGET_LOSS_TYPE}"
+      result_path="${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/linear_scalarization/${class_tag}/${run_tag}/${setting_tag}/evaluation_result.json"
 
-      ulr_suffix="$(float_tag "$method_unlearn_lr")"
-      retain_ref_suffix="$(float_tag "$EU_RETAIN_REF")"
-      forget_ref_suffix="$(float_tag "$EU_FORGET_REF")"
-      for eu_w_lr in "${EU_W_LR_LIST[@]}"; do
-        wlr_suffix="$(float_tag "$eu_w_lr")"
-        for eu_error in "${EU_ERROR_LIST[@]}"; do
-          err_suffix="$(float_tag "$eu_error")"
-          for epochs in "${EPOCH_LIST[@]}"; do
-            run_tag="seed_${seed}_train_${FIXED_TRAIN_SEED}"
-            class_tag="class_${class_to_replace}"
-            setting_tag="ulr_${ulr_suffix}_wlr_${wlr_suffix}_err_${err_suffix}_rref_${retain_ref_suffix}_fref_${forget_ref_suffix}_epoch_${epochs}_flt_${FORGET_LOSS_TYPE}"
-            result_path="${SAVE_DIR}/${ARCH}/${DATASET}/${FORGET_TAG}/RL/${method}/${class_tag}/${run_tag}/${setting_tag}/evaluation_result.json"
+      if [[ -f "$result_path" ]]; then
+        echo
+        echo "[skip] Found existing result: $result_path"
+        continue
+      fi
 
-            if [[ -f "$result_path" ]]; then
-              echo
-              echo "[skip] Found existing result: $result_path"
-              continue
-            fi
+      wandb_entity="linear_scalarization/${class_tag}/${run_tag}/${setting_tag}"
+      wandb_args=(--wandb_entity "$wandb_entity")
+      if [[ -n "$WANDB_PROJECT" ]]; then
+        wandb_args+=(--wandb_project "$WANDB_PROJECT")
+      fi
 
-            wandb_entity="${class_tag}/${run_tag}/${setting_tag}"
-            wandb_args=(--wandb_entity "$wandb_entity")
-            if [[ -n "$WANDB_PROJECT" ]]; then
-              wandb_args+=(--wandb_project "$WANDB_PROJECT")
-            fi
-
-            schedule_if_needed "$result_path" \
-              "$PYTHON_BIN" -u main_random.py \
-              --arch "$ARCH" \
-              --dataset "$DATASET" \
-              --class_to_replace "$class_to_replace" \
-              --mask "$MASK" \
-              --save_dir "$SAVE_DIR" \
-              --seed "$seed" \
-              --train_seed "$FIXED_TRAIN_SEED" \
-              "${wandb_args[@]}" \
-              --unlearn RL \
-              --unlearn_epochs "$epochs" \
-              --unlearn_lr "$method_unlearn_lr" \
-              --mtl \
-              --mtl_method "$method" \
-              --eu_w_lr "$eu_w_lr" \
-              --eu_error "$eu_error" \
-              --eu_retain_ref "$EU_RETAIN_REF" \
-              --eu_forget_ref "$EU_FORGET_REF" \
-              --forget_loss_type "$FORGET_LOSS_TYPE"
-          done
-        done
-      done
+      schedule_if_needed "$result_path" \
+        "$PYTHON_BIN" -u main_random.py \
+        --arch "$ARCH" \
+        --dataset "$DATASET" \
+        --class_to_replace "$class_to_replace" \
+        --mask "$MASK" \
+        --save_dir "$SAVE_DIR" \
+        --seed "$seed" \
+        --train_seed "$FIXED_TRAIN_SEED" \
+        "${wandb_args[@]}" \
+        --unlearn RL \
+        --unlearn_epochs "$epochs" \
+        --unlearn_lr "$LS_UNLEARN_LR" \
+        --forget_loss_type "$FORGET_LOSS_TYPE"
     done
   done
 done
@@ -318,10 +274,10 @@ done
 
 if (( ${#FAILURES[@]} > 0 )); then
   echo
-  echo "Some EUPMU-GA sweep jobs failed:" >&2
+  echo "Some Linear Scalarization RL sweep jobs failed:" >&2
   printf '  %s\n' "${FAILURES[@]}" >&2
   exit 1
 fi
 
 echo
-echo "EUPMU-GA sweep completed."
+echo "Linear Scalarization RL sweep completed."

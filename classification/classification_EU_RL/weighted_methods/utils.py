@@ -119,11 +119,22 @@ def extract_weight_method_parameters_from_args(args):
     Extract the parameters of the weight method from the args.
     """
     method_parameters = defaultdict(dict)
+    eu_forget_ref = args.eu_forget_ref
+    if eu_forget_ref is None:
+        eu_forget_ref = -0.3 if getattr(args, "forget_loss_type", "rl") == "ga" else 0.0
+
     # eu
     method_parameters["eu"]["w_lr"] = args.eu_w_lr
     method_parameters["eu"]["error"] = args.eu_error
+    method_parameters["eu"]["retain_ref"] = args.eu_retain_ref
+    method_parameters["eu"]["forget_ref"] = eu_forget_ref
     if hasattr(args, "weight_init"):
         method_parameters["eu"]["weight_init"] = args.weight_init
+
+    method_parameters["eu_fast"]["w_lr"] = args.eu_w_lr
+    method_parameters["eu_fast"]["error"] = args.eu_error
+    method_parameters["eu_fast"]["retain_ref"] = args.eu_retain_ref
+    method_parameters["eu_fast"]["forget_ref"] = eu_forget_ref
 
     method_parameters["chebyshev"]["task_weights"] = [
         args.cheby_retain_weight,

@@ -173,6 +173,13 @@ def parse_args():
     parser.add_argument("--mtl_method", type=str, default=None, help="Name of Weights & Biases Project.")
     parser.add_argument("--eu_w_lr", default=3, type=float, help="learning rate for weight EUPMU, the bigger the faster weight changes to retain loss change")
     parser.add_argument("--eu_error", default=0.03, type=float, help="the error of weight update in EUPMU, more positive means more focus on retain")
+    parser.add_argument("--eu_retain_ref", default=0.0, type=float, help="Reference value for the EU retain loss")
+    parser.add_argument(
+        "--eu_forget_ref",
+        default=None,
+        type=float,
+        help="Reference value for the EU forget loss; defaults to -0.3 for GA runs and 0.0 otherwise",
+    )
     parser.add_argument("--weight_init", default=0.0, type=float, help="initial weight for EU or RL")
     parser.add_argument("--cheby_retain_weight", default=1.0, type=float, help="Chebyshev weight for the retain loss")
     parser.add_argument("--cheby_forget_weight", default=1.0, type=float, help="Chebyshev weight for the forget loss")

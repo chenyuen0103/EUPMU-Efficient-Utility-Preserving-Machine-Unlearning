@@ -567,10 +567,12 @@ class EU(WeightMethod):
         max_norm: float = 1.0, # the maximum gradient norm
         error: float = 0.01, # the error term
         weight_init: float = 0.0, # initial weight
+        retain_ref: float = 0.0,
+        forget_ref: float = 0.0,
 
     ):
         super().__init__(2, device=device)
-        self.min_losses = torch.zeros(2).to(device)
+        self.min_losses = torch.tensor([retain_ref, forget_ref], dtype=torch.float32, device=device)
         self.w = torch.tensor([weight_init], device=device, requires_grad=True)
         with torch.no_grad():
             self.w.clamp_(min=0.0)
@@ -588,13 +590,29 @@ class EU(WeightMethod):
             self.error = wandb.config.error_eu
         except:
             self.error = error
-        print(f"EU initialized with error {self.error} and w_lr {w_lr} and weight_init {weight_init}")
+        print(
+            f"EU initialized with error {self.error}, w_lr {w_lr}, weight_init {weight_init}, "
+            f"retain_ref {retain_ref}, forget_ref {forget_ref}"
+        )
 
     def set_min_losses(self, losses):
         self.min_losses = losses
 
+    def _validate_forget_reference(self, losses):
+        forget_gap = losses[1] - self.min_losses[1]
+        if float(forget_gap.detach().cpu()) <= 0.0:
+            forget_loss = float(losses[1].detach().cpu())
+            forget_ref = float(self.min_losses[1].detach().cpu())
+            raise ValueError(
+                "EU requires forget_loss - eu_forget_ref > 0 before applying log(). "
+                f"Got forget_loss={forget_loss:.6f}, eu_forget_ref={forget_ref:.6f}, "
+                f"gap={forget_loss - forget_ref:.6f}. "
+                "Use a smaller (more negative) --eu_forget_ref for GA runs."
+            )
+
     def get_weighted_loss(self, losses,**kwargs,):
         self.prev_ret_loss = losses[0]
+        self._validate_forget_reference(losses)
         D = losses - self.min_losses + 1e-8
         D_log = D.log()
         D_copy = D_log.clone()
@@ -631,10 +649,12 @@ class EU_fast(WeightMethod):
         max_norm: float = 1.0, # the maximum gradient norm
         error: float = 0.01, # the error term
         weight_init: float = 1.0, # initial weight
+        retain_ref: float = 0.0,
+        forget_ref: float = 0.0,
 
     ):
         super().__init__(2, device=device)
-        self.min_losses = torch.zeros(2).to(device)
+        self.min_losses = torch.tensor([retain_ref, forget_ref], dtype=torch.float32, device=device)
         self.w = torch.tensor([weight_init], device=device, requires_grad=True)
         with torch.no_grad():
             self.w.clamp_(min=0.0)
@@ -652,10 +672,25 @@ class EU_fast(WeightMethod):
             self.error = wandb.config.error_eu
         except:
             self.error = error
-        print(f"EU initialized with error {self.error} and w_lr {w_lr}")
+        print(
+            f"EU initialized with error {self.error}, w_lr {w_lr}, weight_init {weight_init}, "
+            f"retain_ref {retain_ref}, forget_ref {forget_ref}"
+        )
 
     def set_min_losses(self, losses):
         self.min_losses = losses
+
+    def _validate_forget_reference(self, losses):
+        forget_gap = losses[1] - self.min_losses[1]
+        if float(forget_gap.detach().cpu()) <= 0.0:
+            forget_loss = float(losses[1].detach().cpu())
+            forget_ref = float(self.min_losses[1].detach().cpu())
+            raise ValueError(
+                "EU_fast requires forget_loss - eu_forget_ref > 0 before applying log(). "
+                f"Got forget_loss={forget_loss:.6f}, eu_forget_ref={forget_ref:.6f}, "
+                f"gap={forget_loss - forget_ref:.6f}. "
+                "Use a smaller (more negative) --eu_forget_ref for GA runs."
+            )
 
     def get_weighted_loss(self, losses,**kwargs,):
         # Update weight `w` based on the previous step's retention loss and the current one.
@@ -674,6 +709,7 @@ class EU_fast(WeightMethod):
 
 
         # Calculate the current weighted loss using the current `w` (from the previous step)
+        self._validate_forget_reference(losses)
         D = losses - self.min_losses + 1e-8
         D_log = D.log()
         D_copy = D_log.clone()

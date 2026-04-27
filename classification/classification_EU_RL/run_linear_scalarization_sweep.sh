@@ -236,7 +236,7 @@ for class_to_replace in "${CLASS_LIST[@]}"; do
         continue
       fi
 
-      wandb_entity="${class_tag}/${run_tag}/${setting_tag}"
+      wandb_entity="linear_scalarization/${class_tag}/${run_tag}/${setting_tag}"
       wandb_args=(--wandb_entity "$wandb_entity")
       if [[ -n "$WANDB_PROJECT" ]]; then
         wandb_args+=(--wandb_project "$WANDB_PROJECT")
