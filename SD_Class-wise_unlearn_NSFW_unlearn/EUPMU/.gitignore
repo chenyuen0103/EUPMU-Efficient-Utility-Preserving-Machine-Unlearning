@@ -26,6 +26,15 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*notes*.md
+investigation_logs
+
+temp/
+nohup*.out
+
+models/compvis-*/
+imagenette_without_label_*/
+eval_output/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -36,6 +45,8 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+
+settings.json
 
 # Unit test / coverage reports
 htmlcov/

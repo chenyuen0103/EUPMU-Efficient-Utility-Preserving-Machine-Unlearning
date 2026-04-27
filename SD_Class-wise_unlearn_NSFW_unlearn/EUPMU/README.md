@@ -1,4 +1,11 @@
 # EUPMU for SD class-wise image forgetting
+
+# Note: This document is outdated and needs further update. I apologize for the mess.
+
+For now you can run `./scripts/setup_eupmu_env.sh` and `./SD_Class-wise_unlearn_NSFW_unlearn/EUPMU/unlearning_all_classes_eu.sh` to do the unlearning/image generation/evaluation of UA and FID.
+
+# The old document starts here. Will be updated.
+
 This is the code base for EUPMU for unlearning class-wise image for stable diffusion. The code structure of this project is adapted from [ESD](https://github.com/rohitgandikota/erasing/tree/main) codebase.
 
 Note that this code base aims to forget one class and preserve the other 9 in the imagenette 10-class image dataset, different from the 
@@ -33,6 +40,7 @@ Note that this code base aims to forget one class and preserve the other 9 in th
     ```
 
 
+<<<<<<< HEAD
 # Forgetting Training with EUPMU
 1. Forgetting training with EUPMU
 
@@ -63,6 +71,19 @@ Note that this code base aims to forget one class and preserve the other 9 in th
     ```
 
     For mixed-method Table 1 style sweeps, `run_table1_sd.sh` now supports `eu`, `rl`, `esd`, `omd_tch`, and `omd_tch_pgd` via the `METHODS` environment variable.
+=======
+# Forgetting Training with EUPMU
+1. Forgetting training with EUPMU
+
+    ```
+   python train-scripts/random_label_eu.py --train_method full --lr 1e-5 --alpha 1.0 --epochs 5 --class_to_forget 0 --device '0' --mtl --mtl_method "eu"
+    ```
+   This should create another folder in `./model`. 
+
+   `--alpha` multiplies the retain loss before EU weighting and before the EU retain-loss update. Reducing it is useful when the retain loss is consistently much larger than the forget loss.
+
+   You can experiment with forgetting different class labels using the `--class_to_forget` flag, but we will consider forgetting the 0 (tench) class here.
+>>>>>>> upstream/main
 
 # Generating Images
   1. To use `eval-scripts/generate-images.py` you would need a csv file with columns `prompt`, `evaluation_seed` and `case_number`. (Sample data in `data/`)
